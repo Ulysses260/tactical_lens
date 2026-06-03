@@ -1,0 +1,21 @@
+{
+  "name": "教练版报告",
+  "description": "面向教练，重点突出训练建议和可执行行动",
+  "sections": [
+    {"id": "header", "type": "header", "title": "赛后战术报告"},
+    {"id": "stats_table", "type": "stats_table"},
+    {"id": "shot_map", "type": "chart", "chart_func": "draw_shot_map", "title": "射门位置分析"},
+    {"id": "pass_network", "type": "chart", "chart_func": "draw_pass_network", "title": "传球结构分析"},
+    {"id": "xg_flow", "type": "chart", "chart_func": "draw_xg_flow", "title": "进攻威胁时间线"},
+    {"id": "insights", "type": "insights_block", "title": "战术问题与训练建议"},
+    {"id": "footer", "type": "footer"}
+  ],
+  "insight_rules": {
+    "xg_diff_threshold": 0.5,
+    "possession_diff_threshold": 10,
+    "pass_accuracy_diff_threshold": 5,
+    "shot_on_target_high": 50,
+    "shot_on_target_low": 35,
+    "foul_diff_threshold": 3
+  }
+}

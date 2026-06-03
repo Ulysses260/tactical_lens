@@ -1,0 +1,20 @@
+{
+  "name": "精简战术报告",
+  "description": "只出核心图表+关键洞察，适合快速查看",
+  "sections": [
+    {"id": "header", "type": "header", "title": "战术速报"},
+    {"id": "stats_table", "type": "stats_table"},
+    {"id": "shot_map", "type": "chart", "chart_func": "draw_shot_map", "title": "射门位置图"},
+    {"id": "pass_network", "type": "chart", "chart_func": "draw_pass_network", "title": "传球网络图"},
+    {"id": "insights", "type": "insights_block", "title": "关键发现"},
+    {"id": "footer", "type": "footer"}
+  ],
+  "insight_rules": {
+    "xg_diff_threshold": 1.0,
+    "possession_diff_threshold": 20,
+    "pass_accuracy_diff_threshold": 10,
+    "shot_on_target_high": 55,
+    "shot_on_target_low": 30,
+    "foul_diff_threshold": 8
+  }
+}
