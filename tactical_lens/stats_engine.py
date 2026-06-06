@@ -2,10 +2,15 @@
 stats_engine.py — 统计引擎
 输入：df + info → 输出：stats字典（两队核心数据）
 """
-import ast
+import json
 import pandas as pd
 import numpy as np
-from progression_rules import apply_all_rules, detect_progressive_sequences, detect_defensive_vulnerabilities
+
+try:
+    from progression_rules import apply_all_rules, detect_progressive_sequences, detect_defensive_vulnerabilities
+    _HAS_PROGRESSION = True
+except ImportError:
+    _HAS_PROGRESSION = False
 
 
 def compute_match_stats(df, info):
@@ -59,7 +64,7 @@ def compute_match_stats(df, info):
             tactics_rows = t_df[t_df['tactics'].notna()]
             if not tactics_rows.empty:
                 try:
-                    first_tactic = ast.literal_eval(str(tactics_rows.iloc[0]['tactics']))
+                    first_tactic = json.loads(str(tactics_rows.iloc[0]['tactics']))
                     formation = first_tactic.get('formation', 'N/A')
                 except:
                     pass
@@ -76,20 +81,27 @@ def compute_match_stats(df, info):
             high_turnovers = 0
 
         # === 推进规则指标 ===
-        try:
-            prog_result = apply_all_rules(df, team)
-            prog_summary = prog_result['summary']
-            progressive_passes = prog_summary['progressive_passes']
-            passes_into_final_third = prog_summary['passes_into_final_third']
-            passes_into_box = prog_summary['passes_into_box']
-            deep_progressions = prog_summary['deep_progressions']
-            switches_of_play = prog_summary['switches_of_play']
-            progressive_carries = prog_summary['progressive_carries']
-            ppda = prog_summary.get('ppda')
-            prog_sequences_count = prog_summary['progressive_sequences']
-            weak_zones = prog_summary.get('defensive_weak_zones', [])
-        except Exception as e:
-            print(f"[推进指标] {team}计算异常：{e}")
+        if _HAS_PROGRESSION:
+            try:
+                prog_result = apply_all_rules(df, team)
+                prog_summary = prog_result['summary']
+                progressive_passes = prog_summary['progressive_passes']
+                passes_into_final_third = prog_summary['passes_into_final_third']
+                passes_into_box = prog_summary['passes_into_box']
+                deep_progressions = prog_summary['deep_progressions']
+                switches_of_play = prog_summary['switches_of_play']
+                progressive_carries = prog_summary['progressive_carries']
+                ppda = prog_summary.get('ppda')
+                prog_sequences_count = prog_summary['progressive_sequences']
+                weak_zones = prog_summary.get('defensive_weak_zones', [])
+            except Exception as e:
+                print(f"[推进指标] {team}计算异常：{e}")
+                progressive_passes = passes_into_final_third = passes_into_box = 0
+                deep_progressions = switches_of_play = progressive_carries = 0
+                ppda = None
+                prog_sequences_count = 0
+                weak_zones = []
+        else:
             progressive_passes = passes_into_final_third = passes_into_box = 0
             deep_progressions = switches_of_play = progressive_carries = 0
             ppda = None
@@ -139,12 +151,9 @@ def compute_match_stats(df, info):
     
     return stats
 
+
 def generate_insights(stats, df=None, info=None):
-    """根据统计数据自动生成战术洞察，返回insights列表
-    
-    每条洞察格式：{"category": "进攻/防守/节奏/体能", "text": "xxx", "priority": 1-3}
-    priority: 1=重要发现, 2=值得注意, 3=补充信息
-    """
+    """根据统计数据自动生成战术洞察，返回insights列表"""
     teams = list(stats.keys())
     if len(teams) < 2:
         return [{"category": "通用", "text": "数据不足，无法生成对比洞察", "priority": 3}]
@@ -153,7 +162,6 @@ def generate_insights(stats, df=None, info=None):
     t1, t2 = teams[0], teams[1]
     s1, s2 = stats[t1], stats[t2]
     
-    # === 进攻效率 ===
     for team in teams:
         s = stats[team]
         diff = s['goals'] - s['xg']
@@ -174,7 +182,6 @@ def generate_insights(stats, df=None, info=None):
                     "suggestion": "可分析射门位置分布，判断是选择问题还是技术问题"
                 })
     
-    # === 控球与节奏 ===
     p1 = s1.get('possession_pct', 50)
     p2 = s2.get('possession_pct', 50)
     if abs(p1 - p2) > 15:
@@ -187,7 +194,6 @@ def generate_insights(stats, df=None, info=None):
             "suggestion": f"{less}应关注反击出球速度，而非追求控球率"
         })
     
-    # === 传球质量 ===
     if abs(s1['pass_accuracy'] - s2['pass_accuracy']) > 8:
         better = t1 if s1['pass_accuracy'] > s2['pass_accuracy'] else t2
         worse = t2 if s1['pass_accuracy'] > s2['pass_accuracy'] else t1
@@ -198,7 +204,6 @@ def generate_insights(stats, df=None, info=None):
             "suggestion": f"{worse}可能受对手压迫影响，建议分析传球失败的位置分布"
         })
     
-    # === 射正率 ===
     for team in teams:
         s = stats[team]
         if s['shots_total'] > 0:
@@ -218,7 +223,6 @@ def generate_insights(stats, df=None, info=None):
                     "suggestion": "建议分析射门分布，是否过多远射或被封堵位置射门"
                 })
     
-    # === 逼抢强度 ===
     if s1['fouls'] > s2['fouls'] + 5:
         insights.append({
             "category": "逼抢策略",
@@ -234,7 +238,6 @@ def generate_insights(stats, df=None, info=None):
             "suggestion": f"关注{t2}犯规集中区域，判断是高位逼抢还是低位犯规拖延"
         })
     
-    # === 逼抢位置 ===
     for team in teams:
         s = stats[team]
         if s.get('pressure_avg_x') is not None:
@@ -254,7 +257,6 @@ def generate_insights(stats, df=None, info=None):
                     "suggestion": "对手可在中场耐心组织寻找破绽"
                 })
     
-    # === 推进能力对比 ===
     for team in teams:
         s = stats[team]
         if s.get('progressive_passes', 0) > 0 and len(teams) == 2:
@@ -264,16 +266,14 @@ def generate_insights(stats, df=None, info=None):
             if abs(diff) >= 5:
                 dominant = team if diff > 0 else other
                 dom_s = stats[dominant]
-                ins_suggestion = f"{dominant}推进能力强，建议对手注意中场拦截"
                 insights.append({
                     "category": "推进能力",
                     "text": f"{dominant}推进传球{dom_s['progressive_passes']}次，远超对手{stats[[t for t in teams if t != dominant][0]].get('progressive_passes', 0)}次，球权向前的能力突出",
                     "priority": 2,
-                    "suggestion": ins_suggestion
+                    "suggestion": f"{dominant}推进能力强，建议对手注意中场拦截"
                 })
                 break
 
-    # === PPDA压迫强度 ===
     for team in teams:
         s = stats[team]
         if s.get('ppda') is not None:
@@ -292,7 +292,6 @@ def generate_insights(stats, df=None, info=None):
                     "suggestion": "对手可在中场从容组织"
                 })
 
-    # === 防守薄弱区域 ===
     for team in teams:
         s = stats[team]
         weak_zones = s.get('defensive_weak_zones', [])
@@ -305,7 +304,6 @@ def generate_insights(stats, df=None, info=None):
                 "suggestion": f"建议加强区域({top_zone['center_x']:.0f},{top_zone['center_y']:.0f})附近的防守覆盖"
             })
     
-    # 按优先级排序
     insights.sort(key=lambda x: x['priority'])
     
     if not insights:
