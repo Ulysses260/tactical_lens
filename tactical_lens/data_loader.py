@@ -5,6 +5,12 @@ data_loader.py — 数据加载模块
 import json
 import os
 import pandas as pd
+try:
+    from .fifa_adapter import load_fifa_from_csv
+    _HAS_FIFA_ADAPTER = True
+except ImportError:
+    _HAS_FIFA_ADAPTER = False
+
 
 
 def parse_location(loc_str):
