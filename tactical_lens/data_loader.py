@@ -78,6 +78,17 @@ def load_custom_csv(filepath, match_name="自定义比赛", team_col="team", eve
 
 
 def auto_load(filepath, match_name=None):
+        # FIFA数据目录检测
+    if _HAS_FIFA_ADAPTER and os.path.isdir(filepath):
+        # 检查目录里是否有FIFA格式的CSV文件
+        files = os.listdir(filepath)
+        fifa_markers = ['01_match_info.csv', '03_key_stats.csv', '12_passing_network.csv']
+        if all(f in files for f in fifa_markers):
+            if match_name is None:
+                match_name = os.path.basename(filepath.rstrip('/'))
+            df, info, stats = load_fifa_from_csv(filepath, match_name)
+            info['_fifa_stats'] = stats  # 把预计算的stats挂在info上
+            return df, info
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"找不到文件：{filepath}")
     
