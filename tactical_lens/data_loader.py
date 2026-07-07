@@ -77,17 +77,36 @@ def load_custom_csv(filepath, match_name="自定义比赛", team_col="team", eve
     return df, info
 
 
-def auto_load(filepath, match_name=None):
-        # FIFA数据目录检测
-    if _HAS_FIFA_ADAPTER and os.path.isdir(filepath):
-        # 检查目录里是否有FIFA格式的CSV文件
-        files = os.listdir(filepath)
-        fifa_markers = ['01_match_info.csv', '03_key_stats.csv', '12_passing_network.csv']
-        if all(f in files for f in fifa_markers):
+    # FIFA数据检测（支持目录和单文件）
+    if _HAS_FIFA_ADAPTER:
+        is_fifa = False
+        fifa_dir = None
+
+        if os.path.isdir(filepath):
+            # 目录模式：有任意一个FIFA特征文件就算
+            files = os.listdir(filepath)
+            fifa_markers = [
+                '01_match_info.csv', '03_key_stats.csv',
+                '05_attempts_at_goal.csv', '12_passing_network.csv'
+            ]
+            if any(f in files for f in fifa_markers):
+                is_fifa = True
+                fifa_dir = filepath
+        else:
+            # 单文件模式：文件名是 数字_xxx.csv 格式就算
+            filename = os.path.basename(filepath)
+            if re.match(r'^\d{2}_.*\.csv$', filename):
+                is_fifa = True
+                fifa_dir = os.path.dirname(filepath)
+
+        if is_fifa:
             if match_name is None:
-                match_name = os.path.basename(filepath.rstrip('/'))
-            df, info, stats = load_fifa_from_csv(filepath, match_name)
-            info['_fifa_stats'] = stats  # 把预计算的stats挂在info上
+                if os.path.isdir(filepath):
+                    match_name = os.path.basename(filepath.rstrip('/'))
+                else:
+                    match_name = filename
+            df, info, stats = load_fifa_from_csv(fifa_dir, match_name)
+            info['_fifa_stats'] = stats
             return df, info
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"找不到文件：{filepath}")
