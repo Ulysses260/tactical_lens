@@ -1,16 +1,17 @@
 """
 data_loader.py — 数据加载模块
-支持：StatsBomb CSV、Catapult CSV、自定义CSV
+支持：StatsBomb CSV、Catapult CSV、自定义CSV、FIFA比赛报告CSV
 """
 import json
 import os
+import re
 import pandas as pd
+
 try:
-    from .fifa_adapter import load_fifa_from_csv
+    from fifa_adapter import load_fifa_from_csv
     _HAS_FIFA_ADAPTER = True
 except ImportError:
     _HAS_FIFA_ADAPTER = False
-
 
 
 def parse_location(loc_str):
@@ -77,7 +78,12 @@ def load_custom_csv(filepath, match_name="自定义比赛", team_col="team", eve
     return df, info
 
 
-    # FIFA数据检测（支持目录和单文件）
+def auto_load(filepath, match_name=None):
+    """自动识别格式并加载数据
+    
+    支持：FIFA比赛报告（目录/单文件）、StatsBomb、Catapult、自定义CSV
+    """
+    # ===== FIFA数据检测（优先检测，支持目录和单文件）=====
     if _HAS_FIFA_ADAPTER:
         is_fifa = False
         fifa_dir = None
@@ -104,28 +110,33 @@ def load_custom_csv(filepath, match_name="自定义比赛", team_col="team", eve
                 if os.path.isdir(filepath):
                     match_name = os.path.basename(filepath.rstrip('/'))
                 else:
-                    match_name = filename
+                    match_name = os.path.basename(filepath)
             df, info, stats = load_fifa_from_csv(fifa_dir, match_name)
             info['_fifa_stats'] = stats
             return df, info
+
+    # ===== 普通单文件格式检测 =====
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"找不到文件：{filepath}")
     
     df = pd.read_csv(filepath, nrows=5)
     columns = set(df.columns)
     
+    # StatsBomb格式
     statsbomb_cols = {'type', 'team', 'location', 'possession_team'}
     if statsbomb_cols.issubset(columns):
         if match_name is None:
             match_name = os.path.basename(filepath).replace('.csv', '')
         return load_statsbomb_csv(filepath, match_name)
     
+    # Catapult格式
     catapult_keywords = {'距离', '高强度', 'RHIE', '跑动', '冲刺'}
     if any(kw in ''.join(columns) for kw in catapult_keywords):
         if match_name is None:
             match_name = os.path.basename(filepath).replace('.csv', '')
         return load_catapult_csv(filepath, match_name)
     
+    # 默认自定义格式
     if match_name is None:
         match_name = os.path.basename(filepath).replace('.csv', '')
     return load_custom_csv(filepath, match_name)
