@@ -16,7 +16,6 @@ from stats_engine import compute_match_stats, generate_insights
 from visualizer import generate_all_charts
 from report_engine import generate_text_report, generate_html_report, ReportTemplate
 
-
 # ========== 页面配置 ==========
 st.set_page_config(
     page_title="战术透镜",
@@ -32,10 +31,11 @@ with st.sidebar:
     st.divider()
 
     st.subheader("📂 上传数据")
-    uploaded_file = st.file_uploader(
-        "上传CSV文件",
+    uploaded_files = st.file_uploader(
+        "上传CSV文件（可多选，FIFA数据请全选12个CSV）",
         type=['csv'],
-        help="支持 StatsBomb / Catapult / 自定义CSV格式"
+        accept_multiple_files=True,
+        help="支持 StatsBomb / Catapult / FIFA比赛报告 / 自定义CSV格式"
     )
 
     match_name = st.text_input("比赛名称", value="自定义比赛")
@@ -45,7 +45,6 @@ with st.sidebar:
         ["default - 完整报告", "concise - 精简速报", "coach - 教练版"],
         help="完整报告7张图；精简版2张图；教练版重点训练建议"
     )
-
     template_map = {
         "default - 完整报告": "default",
         "concise - 精简速报": "concise",
@@ -62,6 +61,7 @@ tactical_lens/
 ├── main.py           入口
 ├── app.py            网页版(当前)
 ├── data_loader.py    数据加载
+├── fifa_adapter.py   FIFA数据适配器
 ├── stats_engine.py   统计引擎
 ├── visualizer.py     可视化引擎
 ├── report_engine.py  报告引擎
@@ -72,12 +72,12 @@ tactical_lens/
 """, language=None)
 
     st.divider()
-    st.caption("数据来源：StatsBomb Open Data")
+    st.caption("数据来源：StatsBomb Open Data / FIFA Training Centre")
 
 # ========== 主区域 ==========
 st.title("⚽ 战术透镜 — 比赛分析报告")
 
-if uploaded_file is None:
+if not uploaded_files:
     st.info("👈 在左侧上传CSV数据文件开始分析")
     st.markdown("""
     ---
@@ -86,11 +86,12 @@ if uploaded_file is None:
     | 格式 | 说明 | 关键字段 |
     |------|------|----------|
     | **StatsBomb** | 专业赛事事件数据 | type, team, location, shot_statsbomb_xg |
+    | **FIFA比赛报告** | FIFA Training Centre PDF转换 | 12个CSV文件（01_match_info ~ 12_passing_network） |
     | **Catapult** | 体育科学追踪数据 | 距离, 高强度跑, 冲刺 |
     | **自定义CSV** | 任意比赛数据 | 至少需要 team 列 |
 
     ### 使用流程
-    1. 上传CSV → 自动识别格式
+    1. 上传CSV → 自动识别格式（FIFA请全选12个CSV一起上传）
     2. 选择模板 → 完整/精简/教练版
     3. 自动生成 → 图表 + 洞察 + 报告
     """)
@@ -100,22 +101,37 @@ if uploaded_file is None:
 with st.spinner("正在分析..."):
     # 保存上传文件到临时目录
     temp_dir = tempfile.mkdtemp()
-    csv_path = os.path.join(temp_dir, "match_data.csv")
-    with open(csv_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
     output_dir = os.path.join(temp_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
 
+    # 多文件：保存到目录，传目录路径（FIFA模式）
+    if len(uploaded_files) > 1:
+        csv_dir = os.path.join(temp_dir, "fifa_data")
+        os.makedirs(csv_dir, exist_ok=True)
+        for f in uploaded_files:
+            file_path = os.path.join(csv_dir, f.name)
+            with open(file_path, "wb") as out:
+                out.write(f.getbuffer())
+        load_path = csv_dir
+    else:
+        # 单文件
+        csv_path = os.path.join(temp_dir, "match_data.csv")
+        with open(csv_path, "wb") as f:
+            f.write(uploaded_files[0].getbuffer())
+        load_path = csv_path
+
     # 1. 加载数据
     try:
-        df, info = auto_load(csv_path, match_name=match_name)
+        df, info = auto_load(load_path, match_name=match_name)
     except Exception as e:
         st.error(f"数据加载失败：{e}")
         st.stop()
 
-    # 2. 计算统计
-    stats = compute_match_stats(df, info)
+    # 2. 计算统计（FIFA数据有预计算的stats，直接用）
+    if '_fifa_stats' in info:
+        stats = info['_fifa_stats']
+    else:
+        stats = compute_match_stats(df, info)
 
     # 3. 生成洞察
     insights = generate_insights(stats, df, info)
@@ -181,6 +197,7 @@ if len(teams) >= 2:
 
     # 图表展示
     st.subheader("📈 战术图表")
+
     chart_display = [
         ('shot_map', '射门位置图'),
         ('pass_network', '传球网络图'),
@@ -228,7 +245,6 @@ if len(teams) >= 2:
     # 下载区
     st.subheader("📥 下载报告")
     dl_cols = st.columns(3)
-
     with dl_cols[0]:
         st.download_button(
             "📄 文字报告 (TXT)",
@@ -236,7 +252,6 @@ if len(teams) >= 2:
             file_name=f"{match_name}_报告.txt",
             mime="text/plain"
         )
-
     with dl_cols[1]:
         if os.path.exists(html_path):
             with open(html_path, 'r', encoding='utf-8') as f:
@@ -247,7 +262,6 @@ if len(teams) >= 2:
                 file_name=f"{match_name}_报告.html",
                 mime="text/html"
             )
-
     with dl_cols[2]:
         # 打包所有图片为zip
         zip_path = os.path.join(temp_dir, "charts.zip")
