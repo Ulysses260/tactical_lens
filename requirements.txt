@@ -1,3 +1,4 @@
 pandas
 matplotlib
 streamlit
+pdfplumber>=0.10.0
