@@ -16,6 +16,7 @@ from stats_engine import compute_match_stats, generate_insights
 from visualizer import generate_all_charts
 from report_engine import generate_text_report, generate_html_report, ReportTemplate
 
+
 # ========== 页面配置 ==========
 st.set_page_config(
     page_title="战术透镜",
@@ -32,7 +33,7 @@ with st.sidebar:
 
     st.subheader("📂 上传数据")
     uploaded_files = st.file_uploader(
-        "上传CSV文件（可多选，FIFA数据请全选12个CSV）",
+        "上传CSV文件（FIFA数据请全选12个CSV一起上传）",
         type=['csv'],
         accept_multiple_files=True,
         help="支持 StatsBomb / Catapult / FIFA比赛报告 / 自定义CSV格式"
@@ -45,6 +46,7 @@ with st.sidebar:
         ["default - 完整报告", "concise - 精简速报", "coach - 教练版"],
         help="完整报告7张图；精简版2张图；教练版重点训练建议"
     )
+
     template_map = {
         "default - 完整报告": "default",
         "concise - 精简速报": "concise",
@@ -130,6 +132,12 @@ with st.spinner("正在分析..."):
     # 2. 计算统计（FIFA数据有预计算的stats，直接用）
     if '_fifa_stats' in info:
         stats = info['_fifa_stats']
+    elif 'team' not in df.columns:
+        st.error("❌ 数据格式不匹配：未找到 team 列。\n\n"
+                 "**StatsBomb格式**：上传包含 type/team/location 的事件CSV\n"
+                 "**FIFA比赛报告**：请同时选中全部12个CSV文件一起上传\n"
+                 "**自定义格式**：确保CSV中包含 team 列")
+        st.stop()
     else:
         stats = compute_match_stats(df, info)
 
@@ -197,7 +205,6 @@ if len(teams) >= 2:
 
     # 图表展示
     st.subheader("📈 战术图表")
-
     chart_display = [
         ('shot_map', '射门位置图'),
         ('pass_network', '传球网络图'),
@@ -245,6 +252,7 @@ if len(teams) >= 2:
     # 下载区
     st.subheader("📥 下载报告")
     dl_cols = st.columns(3)
+
     with dl_cols[0]:
         st.download_button(
             "📄 文字报告 (TXT)",
@@ -252,6 +260,7 @@ if len(teams) >= 2:
             file_name=f"{match_name}_报告.txt",
             mime="text/plain"
         )
+
     with dl_cols[1]:
         if os.path.exists(html_path):
             with open(html_path, 'r', encoding='utf-8') as f:
@@ -262,6 +271,7 @@ if len(teams) >= 2:
                 file_name=f"{match_name}_报告.html",
                 mime="text/html"
             )
+
     with dl_cols[2]:
         # 打包所有图片为zip
         zip_path = os.path.join(temp_dir, "charts.zip")
