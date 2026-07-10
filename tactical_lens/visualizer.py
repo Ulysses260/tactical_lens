@@ -251,7 +251,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
                     continue
                 x1, y1 = player_xy[p_from]
                 x2, y2 = player_xy[p_to]
-                lw = max(cnt / max(max_passes / 4, 0.5)
+                lw = max(cnt / max(max_passes / 4, 0.5),0.5)
                 alpha = min(0.3 + cnt / max_passes, 0.75)
                 # 用曲线连接更好看
                 from matplotlib.patches import FancyArrowPatch
