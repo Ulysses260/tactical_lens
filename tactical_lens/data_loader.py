@@ -1,17 +1,17 @@
 """
 data_loader.py — 数据加载模块
-支持：StatsBomb CSV、Catapult CSV、自定义CSV、FIFA比赛报告CSV
+支持：StatsBomb CSV、Catapult CSV、FIFA比赛报告、自定义CSV
 """
 import json
 import os
-import re
 import pandas as pd
 
 try:
     from fifa_adapter import load_fifa_from_csv
     _HAS_FIFA_ADAPTER = True
-except ImportError:
+except Exception as _e:
     _HAS_FIFA_ADAPTER = False
+    print(f"[警告] FIFA适配器加载失败: {_e}")
 
 
 def parse_location(loc_str):
@@ -79,64 +79,38 @@ def load_custom_csv(filepath, match_name="自定义比赛", team_col="team", eve
 
 
 def auto_load(filepath, match_name=None):
-    """自动识别格式并加载数据
-    
-    支持：FIFA比赛报告（目录/单文件）、StatsBomb、Catapult、自定义CSV
-    """
-    # ===== FIFA数据检测（优先检测，支持目录和单文件）=====
-    if _HAS_FIFA_ADAPTER:
-        is_fifa = False
-        fifa_dir = None
-
-        if os.path.isdir(filepath):
-            # 目录模式：有任意一个FIFA特征文件就算
-            files = os.listdir(filepath)
-            fifa_markers = [
-                '01_match_info.csv', '03_key_stats.csv',
-                '05_attempts_at_goal.csv', '12_passing_network.csv'
-            ]
-            if any(f in files for f in fifa_markers):
-                is_fifa = True
-                fifa_dir = filepath
-        else:
-            # 单文件模式：文件名是 数字_xxx.csv 格式就算
-            filename = os.path.basename(filepath)
-            if re.match(r'^\d{2}_.*\.csv$', filename):
-                is_fifa = True
-                fifa_dir = os.path.dirname(filepath)
-
-        if is_fifa:
-            if match_name is None:
-                if os.path.isdir(filepath):
-                    match_name = os.path.basename(filepath.rstrip('/'))
-                else:
-                    match_name = os.path.basename(filepath)
-            df, info, stats = load_fifa_from_csv(fifa_dir, match_name)
-            info['_fifa_stats'] = stats
-            return df, info
-
-    # ===== 普通单文件格式检测 =====
+    """自动识别数据格式并加载"""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"找不到文件：{filepath}")
     
+    # FIFA数据目录检测（优先判断）
+    if _HAS_FIFA_ADAPTER and os.path.isdir(filepath):
+        files = os.listdir(filepath)
+        fifa_markers = ['01_match_info.csv', '03_key_stats.csv', '12_passing_network.csv']
+        if all(f in files for f in fifa_markers):
+            if match_name is None:
+                match_name = os.path.basename(filepath.rstrip('/'))
+            df, info, stats = load_fifa_from_csv(filepath, match_name)
+            info['_fifa_stats'] = stats
+            print(f"[数据加载] {match_name}（FIFA比赛报告）")
+            return df, info
+    
+    # 单文件处理
     df = pd.read_csv(filepath, nrows=5)
     columns = set(df.columns)
     
-    # StatsBomb格式
     statsbomb_cols = {'type', 'team', 'location', 'possession_team'}
     if statsbomb_cols.issubset(columns):
         if match_name is None:
             match_name = os.path.basename(filepath).replace('.csv', '')
         return load_statsbomb_csv(filepath, match_name)
     
-    # Catapult格式
     catapult_keywords = {'距离', '高强度', 'RHIE', '跑动', '冲刺'}
     if any(kw in ''.join(columns) for kw in catapult_keywords):
         if match_name is None:
             match_name = os.path.basename(filepath).replace('.csv', '')
         return load_catapult_csv(filepath, match_name)
     
-    # 默认自定义格式
     if match_name is None:
         match_name = os.path.basename(filepath).replace('.csv', '')
     return load_custom_csv(filepath, match_name)
