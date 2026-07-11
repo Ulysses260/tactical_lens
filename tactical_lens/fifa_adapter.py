@@ -5,6 +5,26 @@ fifa_adapter.py — FIFA比赛报告数据适配器
 
 适配器模式：新增独立适配器，不改动现有StatsBomb/Catapult逻辑
 输出格式：(df, info, stats) 三元组，与stats_engine输出格式兼容
+
+输入CSV文件（csv_dir目录下）：
+  01_match_info.csv          — 比赛基本信息（队伍、比分、日期、场馆）
+  02_lineups.csv             — 首发与替补阵容
+  03_key_stats.csv           — 核心统计（控球、射门、传球、xG等）
+  04_phases_of_play.csv      — 比赛阶段占比
+  05_attempts_at_goal.csv    — 射门明细（含时间、球员、结果、部位、来源）
+  06_crosses.csv             — 传中数据
+  07_offers_to_receive.csv   — 接球申请数据
+  08_in_possession_distributions.csv — 控球分布（传球、过人、突破等）
+  09_in_possession_offers.csv        — 控球时接球申请分布
+  10_out_of_possession.csv   — 防守数据（抢断、拦截、压迫等）
+  11_physical_data.csv       — 体能数据
+  12_passing_network.csv     — 传球网络（球员对传球次数）
+
+限制说明：
+  FIFA数据为聚合/摘要数据，非逐事件流数据。因此：
+  - 射门事件可完整还原（含时间、球员、结果），但无坐标
+  - 传球、防守等只有汇总数据，无法还原逐事件
+  - 无x, y坐标数据，所有依赖坐标的图表精度受限
 """
 import os
 import re
@@ -19,7 +39,9 @@ def _read_csv_safe(filepath):
     if not os.path.exists(filepath):
         return pd.DataFrame()
     df = pd.read_csv(filepath, encoding='utf-8-sig')
+    # 去除列名中的BOM和空白
     df.columns = [c.strip().lstrip('\ufeff') for c in df.columns]
+    # 去除字符串字段中的\r
     for col in df.select_dtypes(include=['object']).columns:
         df[col] = df[col].str.replace('\r', '', regex=False).str.strip()
     return df
@@ -70,7 +92,16 @@ def _parse_fraction(s):
 
 
 def _map_shot_outcome(fifa_outcome):
-    """FIFA射门结果 → StatsBomb风格shot_outcome映射"""
+    """FIFA射门结果 → StatsBomb风格shot_outcome映射
+    
+    FIFA取值：
+      On Target - Goal          → Goal（进球）
+      On Target - Saved         → Saved（被扑）
+      Deflected On Target - Saved → Saved（折射后被扑）
+      Incomplete - Blocked      → Blocked（被封堵）
+      Off Target                → Off T（偏出）
+      Incomplete - Player On Ball Error → Off T（控球失误）
+    """
     if pd.isna(fifa_outcome):
         return 'Unknown'
     o = str(fifa_outcome).strip().lower()
@@ -100,7 +131,14 @@ def _map_body_part(fifa_body_part):
 
 
 def _estimate_xg_per_shot(shots_df, total_xg):
-    """根据射门结果类型估算每脚射门的xG，使总和等于球队总xG"""
+    """根据射门结果类型估算每脚射门的xG，使总和等于球队总xG
+    
+    基准权重（基于典型xG分布）：
+      Goal: 0.50   （进球通常来自高质量机会）
+      Saved: 0.25  （射正被扑的机会质量中等）
+      Blocked: 0.08（被封堵通常质量较低）
+      Off T: 0.08  （射偏通常质量较低）
+    """
     if total_xg <= 0 or shots_df.empty:
         return np.zeros(len(shots_df))
     
@@ -118,83 +156,310 @@ def _estimate_xg_per_shot(shots_df, total_xg):
     if weight_sum == 0:
         return np.full(len(shots_df), total_xg / len(shots_df))
     
+    # 归一化使总和等于 total_xg
     xg_values = weights / weight_sum * total_xg
     return xg_values
 
 
-def _derive_formation(lineups_df, team):
-    """从首发阵容位置推导阵型
-    支持：英文缩写(RB/CB/ST)、中文(后卫/前锋)、位置大类(DF/MF/FW)
-    自动识别role字段（starting/首发/Starter等）
+def _compute_attack_defense_ratio(pass_count, defense_score, shot_count):
+    """计算球员的攻防水准比率，用于位置分类
+    
+    返回值越高越偏向进攻，越低越偏向防守
     """
-    # 找role字段
-    role_col = None
-    for col in lineups_df.columns:
-        if col.lower() in ['role', 'position_type', 'type', 'status', 'is_starting']:
-            role_col = col
-            break
+    if pass_count == 0 and defense_score == 0 and shot_count == 0:
+        return 0.5  # 中性
     
-    starters = None
-    if role_col:
-        role_variants = ['starting', 'starting xi', '首发', 'starter', 'start', 'staring', '1']
-        for rv in role_variants:
-            mask = lineups_df[role_col].astype(str).str.strip().str.lower() == rv
-            candidate = lineups_df[(lineups_df['team'] == team) & mask]
-            if len(candidate) >= 5:
-                starters = candidate
-                break
+    # 进攻指标：射门数 * 10 + 传球数 * 0.5
+    attack_score = shot_count * 10 + pass_count * 0.3
+    # 防守指标：防守得分
+    def_score = defense_score + pass_count * 0.1  # 后卫传球也多
     
-    if starters is None or starters.empty:
-        # 兜底：取该队前11个
-        team_all = lineups_df[lineups_df['team'] == team]
-        if len(team_all) >= 11:
-            starters = team_all.head(11)
-        elif not team_all.empty:
-            starters = team_all
+    total = attack_score + def_score
+    if total == 0:
+        return 0.5
+    return attack_score / total
+
+
+def _classify_outfield_players(players_data, n_defenders_target=4, n_midfielders_target=3, n_forwards_target=3):
+    """对非门将球员进行位置分类
+    
+    使用攻防比率排序法：
+    1. 计算每个球员的攻防比率
+    2. 按比率从低到高排序
+    3. 前N个为后卫，中间M个为中场，后K个为前锋
+    
+    参数:
+        players_data: [{name, passes, defense, shots, clearances, shirt}, ...]
+        n_defenders_target: 目标后卫数
+        n_midfielders_target: 目标中场数
+        n_forwards_target: 目标前锋数
+    
+    返回: {name: position}
+    """
+    if not players_data:
+        return {}
+    
+    n = len(players_data)
+    total_outfield = n_defenders_target + n_midfielders_target + n_forwards_target
+    
+    # 按实际人数调整比例
+    if n <= total_outfield:
+        # 人少就按比例分配
+        n_df = max(1, round(n * n_defenders_target / total_outfield))
+        n_fw = max(1, round(n * n_forwards_target / total_outfield))
+        n_mf = max(0, n - n_df - n_fw)
+    else:
+        n_df = n_defenders_target
+        n_fw = n_forwards_target
+        n_mf = n_midfielders_target
+    
+    # 计算攻防比率
+    for p in players_data:
+        p['ad_ratio'] = _compute_attack_defense_ratio(
+            p['passes'], p['defense'], p['shots']
+        )
+    
+    # 按攻防比率从低到高排序（防守型在前）
+    sorted_players = sorted(players_data, key=lambda x: x['ad_ratio'])
+    
+    positions = {}
+    for i, p in enumerate(sorted_players):
+        if i < n_df:
+            positions[p['name']] = 'DF'
+        elif i < n_df + n_mf:
+            positions[p['name']] = 'MF'
         else:
-            return 'N/A'
+            positions[p['name']] = 'FW'
     
-    # 找position列
-    pos_col = None
-    for col in ['position', 'pos', '位置', 'role']:
-        if col in starters.columns:
-            pos_col = col
-            break
+    return positions
+
+
+def _identify_goalkeeper(player_features, known_gk=None):
+    """从球员中识别门将
     
-    if pos_col is None:
+    识别优先级：
+    1. lineups中已知的GK
+    2. 号码为1, 12, 13, 16, 22, 23等典型门将号码 + 解围数高
+    3. 解围数远高于其他球员
+    """
+    if known_gk and known_gk in player_features:
+        return known_gk
+    
+    gk_numbers = {1, 12, 13, 16, 22, 23, 30}
+    
+    # 先找号码匹配 + 解围/防守特征匹配的
+    candidates = []
+    for name, feat in player_features.items():
+        if feat['shirt'] in gk_numbers:
+            score = feat['clearances'] * 2 + feat['passes'] * 0.1
+            candidates.append((name, score))
+    
+    if candidates:
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return candidates[0][0]
+    
+    # 兜底：解围最多的
+    max_clr = -1
+    best = None
+    for name, feat in player_features.items():
+        if feat['clearances'] > max_clr:
+            max_clr = feat['clearances']
+            best = name
+    return best
+
+
+def _derive_formation_enhanced(lineups_df, pos_dist_df, defense_df, attempts_df, team):
+    """增强版阵型推导：从多数据源汇总球员并推断位置
+    
+    步骤：
+    1. 从lineups获取已知首发位置
+    2. 从控球分布数据筛选出数据量最高的11人作为首发
+    3. 识别门将
+    4. 对剩余10名非门将球员按攻防比率分类为DF/MF/FW
+    5. 输出标准阵型格式（如"4-3-3"）
+    
+    返回: "4-3-3" 格式的阵型字符串
+    """
+    # 1. 从lineups获取已知位置
+    known_positions = {}
+    known_starters = set()
+    if not lineups_df.empty:
+        starters = lineups_df[
+            (lineups_df['team'] == team) & 
+            (lineups_df['role'] == 'starting')
+        ]
+        for _, row in starters.iterrows():
+            name = row.get('player_name', '')
+            pos = row.get('position', '')
+            if name and pos and pos in ['GK', 'DF', 'MF', 'FW']:
+                known_positions[name] = pos
+                known_starters.add(name)
+    
+    # 2. 构建所有球员的特征数据
+    player_features = {}
+    
+    # 传球数据
+    if not pos_dist_df.empty:
+        team_pos = pos_dist_df[pos_dist_df['team'] == team]
+        for _, row in team_pos.iterrows():
+            name = row.get('player_name', '')
+            if not name:
+                continue
+            if name not in player_features:
+                player_features[name] = {'name': name, 'passes': 0, 'defense': 0, 'shots': 0, 'clearances': 0, 'shirt': 0}
+            player_features[name]['passes'] = int(row.get('passes_completed', 0))
+            try:
+                player_features[name]['shirt'] = int(row.get('shirt_number', 0))
+            except (ValueError, TypeError):
+                pass
+    
+    # 防守数据
+    if not defense_df.empty:
+        team_def = defense_df[defense_df['team'] == team]
+        for _, row in team_def.iterrows():
+            name = row.get('player_name', '')
+            if not name:
+                continue
+            if name not in player_features:
+                player_features[name] = {'name': name, 'passes': 0, 'defense': 0, 'shots': 0, 'clearances': 0, 'shirt': 0}
+            
+            tackles_made, tackles_won = _parse_fraction(row.get('tackles_made_won', '0/0'))
+            blocks = int(row.get('blocks', 0))
+            interceptions = int(row.get('interceptions', 0))
+            clearances = int(row.get('clearances', 0))
+            
+            defense_score = (tackles_won or 0) * 2 + blocks + interceptions * 2
+            player_features[name]['defense'] = defense_score
+            player_features[name]['clearances'] = clearances
+            
+            if player_features[name]['shirt'] == 0:
+                try:
+                    player_features[name]['shirt'] = int(row.get('shirt_number', 0))
+                except (ValueError, TypeError):
+                    pass
+    
+    # 射门数据
+    if not attempts_df.empty:
+        team_att = attempts_df[attempts_df['team'] == team]
+        for _, row in team_att.iterrows():
+            name = row.get('player_name', '')
+            if not name:
+                continue
+            if name not in player_features:
+                player_features[name] = {'name': name, 'passes': 0, 'defense': 0, 'shots': 0, 'clearances': 0, 'shirt': 0}
+            player_features[name]['shots'] += 1
+            if player_features[name]['shirt'] == 0:
+                try:
+                    player_features[name]['shirt'] = int(row.get('shirt_number', 0))
+                except (ValueError, TypeError):
+                    pass
+    
+    if not player_features:
         return 'N/A'
     
-    def classify_position(pos_str):
-        pos = str(pos_str).strip().lower()
-        if pos in ['gk', 'goalkeeper', '门将', '守门员']:
-            return 'GK'
-        df_keywords = ['defender', '后卫', 'back', 'cb', 'rb', 'lb', 'rcb', 'lcb',
-                       'rwb', 'lwb', 'sw', 'sweeper', 'df']
-        if any(k in pos for k in df_keywords):
-            return 'DF'
-        fw_keywords = ['forward', '前锋', 'striker', 'st', 'cf', 'wing', 'rw', 'lw',
-                       'rf', 'lf', 'rs', 'ls', 'fw']
-        if any(k in pos for k in fw_keywords):
-            return 'FW'
-        mf_keywords = ['midfielder', '中场', 'midfield', 'cm', 'cdm', 'cam', 'rm', 'lm',
-                       'rcm', 'lcm', 'ram', 'lam', 'mf']
-        if any(k in pos for k in mf_keywords):
-            return 'MF'
-        return 'MF'  # 默认兜底归中场
+    # 3. 筛选首发11人
+    # 已知首发优先，其余按数据量（传球数+防守+射门）补充
+    all_player_list = list(player_features.values())
     
-    df_count = 0
-    mf_count = 0
-    fw_count = 0
+    # 按活跃度排序
+    all_player_list.sort(
+        key=lambda x: x['passes'] * 2 + x['defense'] + x['shots'] * 5, 
+        reverse=True
+    )
     
-    for _, row in starters.iterrows():
-        line = classify_position(row[pos_col])
-        if line == 'DF':
-            df_count += 1
-        elif line == 'MF':
-            mf_count += 1
-        elif line == 'FW':
-            fw_count += 1
+    # 已知的门将必须算
+    known_gk_name = None
+    for name, pos in known_positions.items():
+        if pos == 'GK':
+            known_gk_name = name
+            break
     
+    # 先选出已知首发
+    starting_xi = {}
+    for name in known_starters:
+        if name in player_features:
+            starting_xi[name] = player_features[name]
+    
+    # 如果已知首发不足11人，按活跃度补充
+    if len(starting_xi) < 11:
+        for p in all_player_list:
+            if len(starting_xi) >= 11:
+                break
+            if p['name'] not in starting_xi:
+                starting_xi[p['name']] = p
+    
+    # 4. 识别门将
+    gk_name = _identify_goalkeeper(
+        {name: feat for name, feat in starting_xi.items()},
+        known_gk=known_gk_name
+    )
+    
+    # 5. 非门将球员
+    outfield_players = []
+    for name, feat in starting_xi.items():
+        if name != gk_name:
+            outfield_players.append(feat)
+    
+    # 6. 对非门将球员分类
+    # 先使用已知位置
+    classified = {}
+    unclassified = []
+    
+    for p in outfield_players:
+        name = p['name']
+        if name in known_positions and known_positions[name] in ['DF', 'MF', 'FW']:
+            classified[name] = known_positions[name]
+        else:
+            unclassified.append(p)
+    
+    # 统计已知各位置人数
+    n_known_df = sum(1 for v in classified.values() if v == 'DF')
+    n_known_mf = sum(1 for v in classified.values() if v == 'MF')
+    n_known_fw = sum(1 for v in classified.values() if v == 'FW')
+    
+    # 目标10名非门将球员，按标准4-3-3分配剩余名额
+    target_df = max(n_known_df, 4)
+    target_fw = max(n_known_fw, 3)
+    target_mf = 10 - target_df - target_fw
+    
+    if target_mf < 1:
+        # 调整，确保至少1个中场
+        target_mf = 1
+        if n_known_df > n_known_fw:
+            target_df = 10 - target_mf - target_fw
+        else:
+            target_fw = 10 - target_mf - target_df
+    
+    # 需要补充的数量
+    need_df = max(0, target_df - n_known_df)
+    need_mf = max(0, target_mf - n_known_mf)
+    need_fw = max(0, target_fw - n_known_fw)
+    
+    # 实际需要分类的人数
+    total_need = need_df + need_mf + need_fw
+    if len(unclassified) < total_need:
+        # 人不够，按比例缩减
+        ratio = len(unclassified) / max(total_need, 1)
+        need_df = max(0, round(need_df * ratio))
+        need_fw = max(0, round(need_fw * ratio))
+        need_mf = max(0, len(unclassified) - need_df - need_fw)
+    
+    # 对未分类球员按攻防比率分类
+    if unclassified:
+        new_classified = _classify_outfield_players(
+            unclassified,
+            n_defenders_target=need_df,
+            n_midfielders_target=need_mf,
+            n_forwards_target=need_fw
+        )
+        classified.update(new_classified)
+    
+    # 7. 统计各位置人数
+    df_count = sum(1 for v in classified.values() if v == 'DF')
+    mf_count = sum(1 for v in classified.values() if v == 'MF')
+    fw_count = sum(1 for v in classified.values() if v == 'FW')
+    
+    # 8. 构建阵型字符串（标准格式：后卫-中场-前锋）
     formation_parts = []
     if df_count > 0:
         formation_parts.append(str(df_count))
@@ -203,13 +468,471 @@ def _derive_formation(lineups_df, team):
     if fw_count > 0:
         formation_parts.append(str(fw_count))
     
-    return '-'.join(formation_parts) if formation_parts else 'N/A'
+    formation = '-'.join(formation_parts) if formation_parts else 'N/A'
+    
+    return formation
+
+
+def _extract_fouls_from_defense(defense_df, team):
+    """从防守数据中估算犯规次数
+    
+    FIFA数据没有直接的犯规统计，使用以下指标估算：
+    - possession_interrupted（控球中断）：很大一部分由犯规造成
+    - 抢断失败（tackles_made - tackles_won）：失败的抢断容易造成犯规
+    
+    估算公式：犯规 ≈ 控球中断数 * 0.3 + 抢断失败数 * 0.5
+    并确保数值在合理范围内
+    """
+    if defense_df.empty:
+        return 0
+    
+    team_def = defense_df[defense_df['team'] == team]
+    if team_def.empty:
+        return 0
+    
+    total_interrupted = 0
+    total_tackles_made = 0
+    total_tackles_won = 0
+    
+    for _, row in team_def.iterrows():
+        # 控球中断
+        interrupted = int(row.get('possession_interrupted', 0))
+        total_interrupted += interrupted
+        
+        # 抢断
+        made, won = _parse_fraction(row.get('tackles_made_won', '0/0'))
+        total_tackles_made += made or 0
+        total_tackles_won += won or 0
+    
+    # 估算犯规次数
+    tackle_fouls = max(0, total_tackles_made - total_tackles_won) * 0.4
+    other_fouls = total_interrupted * 0.2
+    estimated_fouls = int(tackle_fouls + other_fouls)
+    
+    # 确保合理性：一场比赛通常犯规在8-20次之间
+    estimated_fouls = max(5, min(estimated_fouls, 25))
+    
+    return estimated_fouls
+
+
+def _extract_key_passes(pos_dist_df, team):
+    """从控球分布数据中提取关键传球（近似值）
+    
+    使用 line_breaks_completed（突破防线完成传球）作为关键传球的近似，
+    因为关键传球的核心特征是"创造得分机会的传球"，而突破防线的传球
+    最接近这一定义。
+    """
+    if pos_dist_df.empty:
+        return 0
+    
+    team_pos = pos_dist_df[pos_dist_df['team'] == team]
+    if team_pos.empty:
+        return 0
+    
+    total_line_breaks = 0
+    for _, row in team_pos.iterrows():
+        lb = int(row.get('line_breaks_completed', 0))
+        total_line_breaks += lb
+    
+    return total_line_breaks
+
+
+# ========== P0新图表数据提取函数 ==========
+
+def _extract_tactical_radar_data(phases_df, teams):
+    """从比赛阶段数据中提取战术雷达图数据
+    
+    进攻维度（7个）：
+      - 组织: Build Up Unopposed + Build Up Opposed
+      - 推进: Progression
+      - 最后三分之一: Final Third
+      - 反击: Counter Attack
+      - 长传: Long Ball
+      - 定位球: Set Piece
+      - 进攻转换: Attacking Transition
+    
+    防守维度（7个）：
+      - 高位压迫: High Press
+      - 高位防线: High Block
+      - 中位压迫: Mid Press
+      - 中位防线: Mid Block
+      - 低位防线: Low Block
+      - 反抢: Counter-press
+      - 防守转换: Defensive Transition
+    
+    返回: {
+        team: {
+            'attack': {dim_name: pct},
+            'defense': {dim_name: pct},
+            'attack_dims': [...],
+            'defense_dims': [...],
+        }
+    }
+    """
+    if phases_df.empty:
+        return {}
+    
+    result = {}
+    attack_dim_map = {
+        '组织': ['Build Up Unopposed', 'Build Up Opposed'],
+        '推进': ['Progression'],
+        '最后三分之一': ['Final Third'],
+        '反击': ['Counter Attack'],
+        '长传': ['Long Ball'],
+        '定位球': ['Set Piece'],
+        '进攻转换': ['Attacking Transition'],
+    }
+    defense_dim_map = {
+        '高位压迫': ['High Press'],
+        '高位防线': ['High Block'],
+        '中位压迫': ['Mid Press'],
+        '中位防线': ['Mid Block'],
+        '低位防线': ['Low Block'],
+        '反抢': ['Counter-press'],
+        '防守转换': ['Defensive Transition'],
+    }
+    
+    in_possession = phases_df[phases_df['phase_category'] == 'In Possession']
+    out_possession = phases_df[phases_df['phase_category'] == 'Out of Possession']
+    
+    for team_key, team_name in [('home', teams[0]), ('away', teams[1])]:
+        pct_col = 'home_pct' if team_key == 'home' else 'away_pct'
+        
+        # 进攻维度
+        attack_values = {}
+        for dim_name, phase_names in attack_dim_map.items():
+            total = 0
+            for pn in phase_names:
+                row = in_possession[in_possession['phase_name'] == pn]
+                if not row.empty:
+                    val = _parse_pct(row.iloc[0][pct_col])
+                    if val is not None:
+                        total += val
+            attack_values[dim_name] = round(total, 1)
+        
+        # 防守维度
+        defense_values = {}
+        for dim_name, phase_names in defense_dim_map.items():
+            total = 0
+            for pn in phase_names:
+                row = out_possession[out_possession['phase_name'] == pn]
+                if not row.empty:
+                    val = _parse_pct(row.iloc[0][pct_col])
+                    if val is not None:
+                        total += val
+            defense_values[dim_name] = round(total, 1)
+        
+        result[team_name] = {
+            'attack': attack_values,
+            'defense': defense_values,
+            'attack_dims': list(attack_dim_map.keys()),
+            'defense_dims': list(defense_dim_map.keys()),
+        }
+    
+    return result
+
+
+def _extract_line_breaks_data(pos_dist_df, teams):
+    """从控球分布数据中提取防线穿透分析数据
+    
+    返回: {
+        team: {
+            'attempts': int,      # 突破尝试次数
+            'completed': int,     # 成功次数
+            'success_rate': float, # 成功率
+            'goals': int,          # 突破后进球
+            'top_players': [{name, attempts, completed, goals}]  # TOP3
+        }
+    }
+    """
+    if pos_dist_df.empty:
+        return {}
+    
+    result = {}
+    
+    for team in teams:
+        team_data = pos_dist_df[pos_dist_df['team'] == team].copy()
+        if team_data.empty:
+            result[team] = {'attempts': 0, 'completed': 0, 'success_rate': 0, 'goals': 0, 'top_players': []}
+            continue
+        
+        total_attempts = int(team_data['line_breaks_attempted'].sum())
+        total_completed = int(team_data['line_breaks_completed'].sum())
+        total_goals = int(team_data['line_break_goals'].sum())
+        success_rate = round(total_completed / max(total_attempts, 1) * 100, 1)
+        
+        # 球员TOP3（按成功突破数排序）
+        player_stats = team_data[team_data['line_breaks_completed'] > 0].copy()
+        player_stats = player_stats.sort_values('line_breaks_completed', ascending=False).head(3)
+        
+        top_players = []
+        for _, row in player_stats.iterrows():
+            top_players.append({
+                'name': row.get('player_name', ''),
+                'attempts': int(row.get('line_breaks_attempted', 0)),
+                'completed': int(row.get('line_breaks_completed', 0)),
+                'goals': int(row.get('line_break_goals', 0)),
+            })
+        
+        result[team] = {
+            'attempts': total_attempts,
+            'completed': total_completed,
+            'success_rate': success_rate,
+            'goals': total_goals,
+            'top_players': top_players,
+        }
+    
+    return result
+
+
+def _extract_cross_tactics_data(crosses_df, pos_dist_df, teams):
+    """从传中数据中提取传中战术分析数据
+    
+    6种传中类型：inswing(内旋)、outswing(外旋)、driven(平抽)、
+                 lofted(高吊)、cutback(倒三角)、push_cross(推传中)
+    
+    返回: {
+        team: {
+            'type_distribution': {type_name: count},  # 各类型传中数
+            'type_names_cn': {type_en: type_cn},      # 中文名映射
+            'total_attempted': int,
+            'total_completed': int,
+            'success_rate': float,
+        }
+    }
+    """
+    result = {}
+    
+    type_names_cn = {
+        'inswing': '内旋',
+        'outswing': '外旋',
+        'driven': '平抽',
+        'lofted': '高吊',
+        'cutback': '倒三角',
+        'push_cross': '推传中',
+    }
+    
+    cross_types = ['inswing', 'outswing', 'driven', 'lofted', 'cutback', 'push_cross']
+    
+    for team in teams:
+        type_dist = {}
+        total_attempted = 0
+        total_completed = 0
+        
+        # 先从控球分布数据获取总数（更全面准确）
+        if not pos_dist_df.empty:
+            team_pos = pos_dist_df[pos_dist_df['team'] == team]
+            if not team_pos.empty:
+                if 'crosses_attempted' in team_pos.columns:
+                    total_attempted = int(team_pos['crosses_attempted'].sum())
+                if 'crosses_completed' in team_pos.columns:
+                    total_completed = int(team_pos['crosses_completed'].sum())
+        
+        # 从传中明细数据获取类型分布
+        if not crosses_df.empty:
+            team_crosses = crosses_df[crosses_df['team'] == team]
+            type_total = 0
+            for ct in cross_types:
+                if ct in team_crosses.columns:
+                    cnt = int(team_crosses[ct].sum())
+                    type_dist[ct] = cnt
+                    type_total += cnt
+            # 如果pos_dist没有总数，用类型分布总和
+            if total_attempted == 0:
+                total_attempted = type_total
+        
+        success_rate = round(total_completed / max(total_attempted, 1) * 100, 1)
+        
+        result[team] = {
+            'type_distribution': type_dist,
+            'type_names_cn': type_names_cn,
+            'total_attempted': total_attempted,
+            'total_completed': total_completed,
+            'success_rate': success_rate,
+        }
+    
+    return result
+
+
+def _extract_physical_zones_data(physical_df, teams):
+    """从体能数据中提取五分区体能数据
+    
+    5个分区：zone1_walk(走)、zone2_jog(慢跑)、zone3_run(跑)、
+             zone4_low_sprint(低速冲刺)、zone5_high_sprint(高速冲刺)
+    
+    返回: {
+        team: {
+            'zones': {zone_name: distance_m},
+            'zone_names_cn': {zone_en: zone_cn},
+            'total_distance': float,
+            'sprints_count': int,       # zone4+5冲刺次数
+            'high_speed_runs': int,     # 高速跑次数
+            'top_speed_players': [{name, top_speed}]  # 最高速度TOP3
+        }
+    }
+    """
+    result = {}
+    
+    zone_names_cn = {
+        'zone1_walk': '走',
+        'zone2_jog': '慢跑',
+        'zone3_run': '跑',
+        'zone4_low_sprint': '低速冲刺',
+        'zone5_high_sprint': '高速冲刺',
+    }
+    
+    zones = ['zone1_walk_m', 'zone2_jog_m', 'zone3_run_m', 'zone4_low_sprint_m', 'zone5_high_sprint_m']
+    
+    for team in teams:
+        zone_dist = {}
+        total_distance = 0.0
+        total_sprints = 0
+        total_high_speed_runs = 0
+        
+        if physical_df.empty:
+            result[team] = {
+                'zones': zone_dist,
+                'zone_names_cn': zone_names_cn,
+                'total_distance': 0,
+                'sprints_count': 0,
+                'high_speed_runs': 0,
+                'top_speed_players': [],
+            }
+            continue
+        
+        team_phys = physical_df[physical_df['team'] == team].copy()
+        if team_phys.empty:
+            result[team] = {
+                'zones': zone_dist,
+                'zone_names_cn': zone_names_cn,
+                'total_distance': 0,
+                'sprints_count': 0,
+                'high_speed_runs': 0,
+                'top_speed_players': [],
+            }
+            continue
+        
+        # 各分区距离（全队总和）
+        for z in zones:
+            if z in team_phys.columns:
+                dist = float(team_phys[z].sum())
+                key = z.replace('_m', '')
+                zone_dist[key] = round(dist, 1)
+                total_distance += dist
+        
+        # 冲刺次数
+        if 'sprints_zone4_5' in team_phys.columns:
+            total_sprints = int(team_phys['sprints_zone4_5'].sum())
+        if 'high_speed_runs_zone3' in team_phys.columns:
+            total_high_speed_runs = int(team_phys['high_speed_runs_zone3'].sum())
+        
+        # 最高速度TOP3
+        top_speed_players = []
+        if 'top_speed_kmh' in team_phys.columns:
+            top_speeds = team_phys.nlargest(3, 'top_speed_kmh')
+            for _, row in top_speeds.iterrows():
+                top_speed_players.append({
+                    'name': row.get('player_name', ''),
+                    'top_speed': round(float(row.get('top_speed_kmh', 0)), 1),
+                })
+        
+        result[team] = {
+            'zones': zone_dist,
+            'zone_names_cn': zone_names_cn,
+            'total_distance': round(total_distance, 1),
+            'sprints_count': total_sprints,
+            'high_speed_runs': total_high_speed_runs,
+            'top_speed_players': top_speed_players,
+        }
+    
+    return result
+
+
+def _build_player_defense_stats(defense_df, pos_dist_df, team):
+    """构建球员级防守数据，用于FIFA模式防守热力图
+    
+    返回 DataFrame，包含：player_name, defense_score, tackles, blocks, 
+    interceptions, clearances, pressing, approx_x, approx_y
+    """
+    if defense_df.empty:
+        return pd.DataFrame()
+    
+    team_def = defense_df[defense_df['team'] == team].copy()
+    if team_def.empty:
+        return pd.DataFrame()
+    
+    # 计算防守综合得分
+    defense_scores = []
+    for _, row in team_def.iterrows():
+        tackles_made, tackles_won = _parse_fraction(row.get('tackles_made_won', '0/0'))
+        blocks = int(row.get('blocks', 0))
+        interceptions = int(row.get('interceptions', 0))
+        clearances = int(row.get('clearances', 0))
+        pressing = int(row.get('pressing_direct', 0)) + int(row.get('pressing_indirect', 0))
+        
+        score = (tackles_won or 0) * 3 + blocks * 2 + interceptions * 3 + pressing * 0.5
+        
+        defense_scores.append({
+            'player_name': row.get('player_name', ''),
+            'defense_score': score,
+            'tackles_won': tackles_won or 0,
+            'blocks': blocks,
+            'interceptions': interceptions,
+            'clearances': clearances,
+            'pressing': pressing,
+        })
+    
+    df = pd.DataFrame(defense_scores)
+    
+    # 估算球员场上位置（用于热力图近似坐标）
+    # 基于防守数据特征粗略分配x坐标（从后到前）
+    if not df.empty:
+        n = len(df)
+        # 按解围数+防守得分排序，解围多的在后场
+        df_sorted = df.sort_values(['clearances', 'defense_score'], ascending=[False, False]).reset_index(drop=True)
+        
+        # 分配近似坐标（StatsBomb坐标系：x∈[0,120], y∈[0,80]）
+        # 后卫在x=30附近，中场在x=60，前锋在x=90
+        positions = []
+        for i in range(n):
+            # 根据防守类型判断大致位置
+            row = df_sorted.iloc[i]
+            if row['clearances'] > 10:  # 门将/后卫
+                x = 20 + (i % 3) * 15
+                y = 20 + (i // 3) * 20
+            elif row['interceptions'] > 2:  # 中场
+                x = 50 + (i % 3) * 10
+                y = 15 + (i // 3) * 25
+            else:  # 前锋
+                x = 80 + (i % 3) * 10
+                y = 20 + (i // 3) * 20
+            
+            positions.append({'approx_x': min(max(x, 5), 115), 'approx_y': min(max(y, 5), 75)})
+        
+        pos_df = pd.DataFrame(positions)
+        df_sorted = pd.concat([df_sorted, pos_df], axis=1)
+        df = df_sorted
+    
+    return df
 
 
 # ========== 主适配器函数 ==========
 
 def load_fifa_from_csv(csv_dir, match_name=None):
-    """加载FIFA比赛报告CSV目录，返回统一格式 (df, info, stats)"""
+    """加载FIFA比赛报告CSV目录，返回统一格式 (df, info, stats)
+    
+    参数：
+        csv_dir: FIFA CSV文件所在目录路径
+        match_name: 比赛名称，为空则从match_info中自动生成
+    
+    返回：
+        df: DataFrame — 事件流（仅射门事件可还原，其余字段留空/NA）
+        info: dict — 比赛元信息，含limited_features标记受限功能
+        stats: dict — 与stats_engine输出格式一致的统计字典
+    
+    示例：
+        df, info, stats = load_fifa_from_csv('/path/to/csv_output/', '加拿大vs摩洛哥')
+    """
     # ---- 步骤1：读取所有CSV文件 ----
     csv_files = {
         'match_info': os.path.join(csv_dir, '01_match_info.csv'),
@@ -323,6 +1046,7 @@ def load_fifa_from_csv(csv_dir, match_name=None):
                 except (ValueError, TypeError):
                     team_stats[away_team]['forced_turnovers'] = 0
     
+    # 兜底：用比分验证进球数
     team_stats[home_team]['goals'] = home_score
     team_stats[away_team]['goals'] = away_score
     
@@ -336,26 +1060,32 @@ def load_fifa_from_csv(csv_dir, match_name=None):
             shot_outcome = _map_shot_outcome(fifa_outcome)
             
             shot_events.append({
+                # 事件基础字段
                 'type': 'Shot',
                 'team': row.get('team', ''),
                 'player': row.get('player_name', ''),
                 'minute': int(row['time_min']) if pd.notna(row.get('time_min')) else None,
                 'period': 1 if (pd.notna(row.get('time_min')) and int(row['time_min']) <= 45) else 2,
+                # 位置坐标（FIFA数据无坐标，留空）
                 'x': np.nan,
                 'y': np.nan,
+                # 射门相关字段
                 'shot_outcome': shot_outcome,
                 'shot_body_part': _map_body_part(row.get('body_part')),
-                'shot_technique': row.get('delivery_type', ''),
-                'shot_statsbomb_xg': np.nan,
+                'shot_technique': row.get('delivery_type', ''),  # 传球来源/技术类型
+                'shot_statsbomb_xg': np.nan,  # 稍后按球队分配
+                # 传球相关字段（非射门事件，留空）
                 'pass_outcome': np.nan,
                 'pass_recipient': np.nan,
                 'pass_end_x': np.nan,
                 'pass_end_y': np.nan,
+                # 控球队伍
                 'possession_team': row.get('team', ''),
             })
     
     df = pd.DataFrame(shot_events)
     
+    # 估算每脚射门的xG（按球队分配总xG）
     if not df.empty:
         for team in teams:
             team_shots = df[df['team'] == team].index
@@ -364,6 +1094,7 @@ def load_fifa_from_csv(csv_dir, match_name=None):
                 xg_vals = _estimate_xg_per_shot(df.loc[team_shots], total_xg)
                 df.loc[team_shots, 'shot_statsbomb_xg'] = xg_vals
     
+    # 按时间排序
     if not df.empty and 'minute' in df.columns:
         df = df.sort_values('minute').reset_index(drop=True)
     
@@ -371,21 +1102,16 @@ def load_fifa_from_csv(csv_dir, match_name=None):
     pos_dist_df = data['possession_dist']
     defense_df = data['defense']
     
+    # 传球排行榜（按成功传球数）
     pass_leaders = {team: pd.Series(dtype=int) for team in teams}
     if not pos_dist_df.empty:
         for team in teams:
             team_data = pos_dist_df[pos_dist_df['team'] == team]
             if not team_data.empty:
-                # 尝试找成功传球列
-                pass_col = None
-                for col in ['passes_completed', 'completed_passes', 'successful_passes', '成功传球']:
-                    if col in team_data.columns:
-                        pass_col = col
-                        break
-                if pass_col and 'player_name' in team_data.columns:
-                    leaders = team_data.set_index('player_name')[pass_col].sort_values(ascending=False).head(5)
-                    pass_leaders[team] = leaders
+                leaders = team_data.set_index('player_name')['passes_completed'].sort_values(ascending=False).head(5)
+                pass_leaders[team] = leaders
     
+    # 射门排行榜
     shot_leaders = {team: pd.Series(dtype=int) for team in teams}
     if not attempts_df.empty:
         for team in teams:
@@ -394,6 +1120,7 @@ def load_fifa_from_csv(csv_dir, match_name=None):
                 leaders = team_data.groupby('player_name').size().sort_values(ascending=False).head(3)
                 shot_leaders[team] = leaders
     
+    # xG排行榜（按射门次数比例估算，由于FIFA无单射xG）
     xg_leaders = {team: pd.Series(dtype=float) for team in teams}
     if not df.empty:
         for team in teams:
@@ -402,108 +1129,130 @@ def load_fifa_from_csv(csv_dir, match_name=None):
                 leaders = team_shots.groupby('player')['shot_statsbomb_xg'].sum().sort_values(ascending=False).head(3)
                 xg_leaders[team] = leaders
     
-    # ---- 步骤6：推导阵型 ----
+    # ---- 步骤6：增强版阵型推导 ----
     lineups_df = data['lineups']
     formations = {}
     for team in teams:
-        formations[team] = _derive_formation(lineups_df, team)
+        formations[team] = _derive_formation_enhanced(
+            lineups_df, pos_dist_df, defense_df, attempts_df, team
+        )
     
-    # ---- 步骤7：角球数统计 ----
+    # ---- 步骤7：角球数统计（来自射门中Corner类型）----
     corners_count = {team: 0 for team in teams}
     if not attempts_df.empty:
         for team in teams:
             team_corners = attempts_df[
                 (attempts_df['team'] == team) & 
-                (attempts_df['delivery_type'].astype(str).str.contains('Corner|角球', case=False, na=False))
+                (attempts_df['delivery_type'] == 'Corner')
             ]
             corners_count[team] = len(team_corners)
     
-    # ---- 步骤8：防守数据汇总（自动识别犯规列）----
+    # ---- 步骤8：从防守数据提取犯规 ----
     fouls_count = {team: 0 for team in teams}
+    fouls_won_count = {team: 0 for team in teams}
     if not defense_df.empty:
-        foul_col = None
-        for col in defense_df.columns:
-            col_lower = col.lower()
-            if 'foul' in col_lower or '犯规' in col_lower:
-                foul_col = col
-                break
-        if foul_col and 'team' in defense_df.columns:
-            for team in teams:
-                team_def = defense_df[defense_df['team'] == team]
-                if not team_def.empty:
-                    try:
-                        fouls_count[team] = int(team_def[foul_col].sum())
-                    except (ValueError, TypeError):
-                        pass
+        for team in teams:
+            fouls_count[team] = _extract_fouls_from_defense(defense_df, team)
+        # 对方的犯规约等于本方被犯规（fouls_won）
+        fouls_won_count[teams[0]] = fouls_count[teams[1]]
+        fouls_won_count[teams[1]] = fouls_count[teams[0]]
     
-    # ---- 步骤9：构建stats字典 ----
+    # ---- 步骤9：从控球分布提取关键传球 ----
+    key_passes_count = {team: 0 for team in teams}
+    if not pos_dist_df.empty:
+        for team in teams:
+            key_passes_count[team] = _extract_key_passes(pos_dist_df, team)
+    
+    # ---- 步骤10：构建球员级防守数据（用于热力图）----
+    player_defense = {}
+    for team in teams:
+        player_defense[team] = _build_player_defense_stats(
+            defense_df, pos_dist_df, team
+        )
+    
+    # ---- 步骤11：构建stats字典（与stats_engine格式一致）----
     stats = {}
     for team in teams:
         ts = team_stats[team]
         
+        # 射偏/封堵数 = 总射门 - 射正
         shots_off_target = ts.get('shots_total', 0) - ts.get('shots_on_target', 0)
+        
+        # 控球事件数（按控球率比例估算总事件数，用传球总数作为代理）
         possession_events = ts.get('passes_total', 0) + ts.get('shots_total', 0)
+        
+        # 总事件数（粗略估算）
         total_events = possession_events + ts.get('forced_turnovers', 0)
         
         stats[team] = {
+            # 基础事件
             'total_events': total_events,
             'possession_events': possession_events,
+            
+            # 传球
             'passes_total': ts.get('passes_total', 0),
             'passes_completed': ts.get('passes_completed', 0),
             'pass_accuracy': ts.get('pass_accuracy', 0),
+            
+            # 射门
             'shots_total': ts.get('shots_total', 0),
             'shots_on_target': ts.get('shots_on_target', 0),
             'shots_off_target': shots_off_target,
             'goals': ts.get('goals', 0),
             'xg': ts.get('xg', 0),
+            
+            # 犯规/角球/越位（从防守数据估算犯规）
             'fouls': fouls_count[team],
-            'fouls_won': 0,
+            'fouls_won': fouls_won_count[team],
             'corners': corners_count[team],
             'offsides': 0,
-            'key_passes': 0,
+            
+            # 关键传球/助攻（从line_breaks提取关键传球）
+            'key_passes': key_passes_count[team],
             'assists': 0,
+            
+            # 球员排行
             'pass_leaders': pass_leaders[team],
             'shot_leaders': shot_leaders[team],
             'xg_leaders': xg_leaders[team],
+            
+            # 阵型
             'formation': formations[team],
+            
+            # 逼抢位置（无坐标数据，置None）
             'pressure_avg_x': None,
             'high_turnovers': 0,
+            
+            # 推进相关指标（FIFA有部分数据，其余置0/None）
             'progressive_passes': 0,
             'passes_into_final_third': 0,
             'passes_into_box': 0,
             'deep_progressions': ts.get('ball_progressions', 0),
-            'switches_of_play': 0,
+            'switches_of_play': 0,  # 可从球员数据汇总
             'progressive_carries': 0,
             'ppda': None,
             'progressive_sequences': 0,
             'defensive_weak_zones': [],
         }
     
-    # 补充switches_of_play
+    # 计算switches_of_play（从球员级数据汇总）
     if not pos_dist_df.empty:
         for team in teams:
             team_data = pos_dist_df[pos_dist_df['team'] == team]
-            if not team_data.empty:
-                for col in ['switches_of_play', 'switches', 'switch_of_play']:
-                    if col in team_data.columns:
-                        try:
-                            stats[team]['switches_of_play'] = int(team_data[col].sum())
-                        except (ValueError, TypeError):
-                            pass
-                        break
+            if not team_data.empty and 'switches_of_play' in team_data.columns:
+                stats[team]['switches_of_play'] = int(team_data['switches_of_play'].sum())
     
-    # 控球率
+    # 控球率（直接使用FIFA数据）
     for team in teams:
         stats[team]['possession_pct'] = team_stats[team].get('possession_pct', 50)
     
-    # ---- 步骤10：传球网络数据注入info ----
-    passing_network_data = {}
-    if not data['passing_network'].empty:
-        for team in teams:
-            team_pn = data['passing_network'][data['passing_network']['team'] == team]
-            passing_network_data[team] = team_pn.to_dict('records')
+    # ---- 步骤11.5：提取P0新图表专用数据 ----
+    tactical_radar_data = _extract_tactical_radar_data(data['phases'], teams)
+    line_breaks_data = _extract_line_breaks_data(pos_dist_df, teams)
+    cross_tactics_data = _extract_cross_tactics_data(data['crosses'], pos_dist_df, teams)
+    physical_zones_data = _extract_physical_zones_data(data['physical'], teams)
     
-    # ---- 步骤11：构建info字典 ----
+    # ---- 步骤12：构建info字典 ----
     info = {
         'name': match_name,
         'teams': teams,
@@ -517,23 +1266,34 @@ def load_fifa_from_csv(csv_dir, match_name=None):
         'stadium': info_dict.get('stadium', ''),
         'match_round': info_dict.get('match_round', ''),
         'kickoff_time': info_dict.get('kickoff_time', ''),
+        # FIFA数据特有的附加信息
         'fifa_extra': {
             'phases_of_play': data['phases'].to_dict('records') if not data['phases'].empty else [],
-            'defensive_stats': True,
-            'physical_stats': True,
-            'passing_network': True,
+            'defensive_stats': True,  # 有防守数据
+            'physical_stats': True,   # 有体能数据
+            'passing_network': True,  # 有传球网络
+            'player_defense_stats': player_defense,  # 球员级防守数据（用于热力图）
+            'key_passes_source': 'line_breaks_completed',  # 关键传球数据来源说明
+            'fouls_estimated': True,  # 犯规为估算值
+            # P0新图表数据
+            'tactical_radar': tactical_radar_data,    # 战术风格雷达图数据
+            'line_breaks': line_breaks_data,          # 防线穿透分析数据
+            'cross_tactics': cross_tactics_data,      # 传中战术分析数据
+            'physical_zones': physical_zones_data,    # 体能五分区数据
         },
-        'fifa_passing_network': passing_network_data,
-        'fifa_lineups': data['lineups'].to_dict('records') if not data['lineups'].empty else [],
+        # 受限功能列表（FIFA数据无法支持的功能）
         'limited_features': [
-            'shot_coordinates',
-            'pressure_heatmap',
-            'offsides_data',
-            'assists_data',
-            'key_passes_data',
-            'ppda_calculation',
-            'progressive_pass_detail',
-            'defensive_weak_zones',
+            'shot_coordinates',       # 射门无坐标，射门位置图无法精确定位
+            'pass_coordinates',       # 传球无坐标，传球网络仅能显示节点大小
+            'possession_timeline',    # 无逐事件控球数据，时间线图精度有限
+            'pressure_heatmap',       # 无防守事件坐标，热力图使用近似位置
+            'fouls_data',             # 犯规为估算值，非精确统计
+            'offsides_data',          # 无越位数据
+            'assists_data',           # 无助攻数据
+            'key_passes_data',        # 关键传球为近似值（源自line_breaks）
+            'ppda_calculation',       # 无法计算PPDA（缺少防守事件数）
+            'progressive_pass_detail',  # 推进传球细节不足
+            'defensive_weak_zones',   # 无法计算防守薄弱区域
         ],
     }
     
@@ -541,6 +1301,10 @@ def load_fifa_from_csv(csv_dir, match_name=None):
     print(f"  比赛：{home_team} {home_score} - {away_score} {away_team}")
     print(f"  事件数：{len(df)}（全部为射门事件）")
     print(f"  球队：{teams}")
+    print(f"  阵型：{formations[home_team]} vs {formations[away_team]}")
+    print(f"  犯规：{fouls_count[home_team]} - {fouls_count[away_team]}（估算值）")
+    print(f"  关键传球：{key_passes_count[home_team]} - {key_passes_count[away_team]}")
+    print(f"  受限功能：{len(info['limited_features'])}项")
     
     return df, info, stats
 
@@ -548,20 +1312,32 @@ def load_fifa_from_csv(csv_dir, match_name=None):
 # ========== 便捷函数 ==========
 
 def is_fifa_csv_dir(csv_dir):
-    """判断一个目录是否为FIFA比赛报告CSV输出目录"""
+    """判断一个目录是否为FIFA比赛报告CSV输出目录
+    
+    检测依据：是否同时存在01_match_info.csv和05_attempts_at_goal.csv
+    """
     required = ['01_match_info.csv', '05_attempts_at_goal.csv', '03_key_stats.csv']
     return all(os.path.exists(os.path.join(csv_dir, f)) for f in required)
 
 
 def fifa_chart_support(info):
-    """返回各图表对FIFA数据的支持情况"""
+    """返回各图表对FIFA数据的支持情况
+    
+    返回：{图表ID: (支持等级, 说明)}
+    支持等级：full（完整支持）、partial（部分支持）、none（不支持）
+    """
     support = {
         'shot_comparison': ('full', '射门对比数据完整'),
-        'stats_bar': ('full', '核心数据对比完整（控球、传球、射门、角球）'),
+        'stats_bar': ('full', '核心数据对比完整（控球、传球、射门、角球、犯规、关键传球）'),
         'xg_flow': ('partial', 'xG累积曲线可用，xG为按结果类型估算值'),
         'shot_map': ('partial', '射门位置图无坐标，只能显示射门数量统计'),
-        'pass_network': ('partial', '传球网络按位置分层布局，无精确坐标'),
+        'pass_network': ('partial', '传球网络仅有传球次数，无位置坐标'),
         'possession_timeline': ('partial', '仅射门事件有时间，控球时间线不完整'),
-        'pressure_heatmap': ('none', '无防守事件坐标数据，无法生成热力图'),
+        'pressure_heatmap': ('partial', '防守热力图使用球员位置近似值，非精确坐标'),
+        # FIFA专属P0图表
+        'tactical_radar': ('full', '战术风格雷达图数据完整（14个攻防维度）'),
+        'line_breaks': ('full', '防线穿透分析数据完整（尝试、成功、进球、球员排行）'),
+        'cross_tactics': ('full', '传中战术分析数据完整（6种类型分布+成功率）'),
+        'physical_zones': ('full', '体能五分区图数据完整（5分区+冲刺+最高速度）'),
     }
     return support
