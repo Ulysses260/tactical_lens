@@ -32,48 +32,26 @@ GRID_COLOR = '#21262d'
 # ========== 中文字体适配 ==========
 
 def _setup_chinese_font():
-    """自动检测并配置中文字体，解决Linux环境中文乱码问题
+    """自动检测并配置中文字体，解决Linux/Streamlit Cloud环境中文乱码问题
     
-    检测优先级：
-    1. 系统已安装的中文字体（Noto Sans CJK, WenQuanYi, Microsoft YaHei等）
-    2. 项目目录下的fonts文件夹中的字体文件
-    3. matplotlib默认sans-serif（英文降级）
+    检测优先级（从高到低）：
+    1. 项目目录下 fonts/ 文件夹中的字体文件（随项目部署，最可靠）
+    2. 系统已安装的中文字体（Noto Sans CJK, WenQuanYi, SimHei等）
+    3. matplotlib默认sans-serif（英文降级，中文显示方框但不报错）
     """
-    # 常见中文字体名称列表（按优先级排序）
-    chinese_font_names = [
-        'Noto Sans CJK SC',
-        'Noto Sans SC',
-        'WenQuanYi Micro Hei',
-        'WenQuanYi Zen Hei',
-        'Microsoft YaHei',
-        'SimHei',
-        'PingFang SC',
-        'Heiti SC',
-        'Source Han Sans CN',
-        'Droid Sans Fallback',
-    ]
-    
-    # 检测系统已有的中文字体
-    available_fonts = {f.name for f in font_manager.fontManager.ttflist}
-    
-    for font_name in chinese_font_names:
-        if font_name in available_fonts:
-            plt.rcParams['font.family'] = [font_name, 'sans-serif']
-            plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
-            print(f"[可视化] 使用中文字体: {font_name}")
-            return True
-    
-    # 尝试从项目目录加载字体文件
+    # ---- 第1优先级：项目 fonts/ 目录下的字体文件 ----
     project_font_dirs = [
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts'),
         os.path.join(os.getcwd(), 'fonts'),
-        '/usr/share/fonts/opentype/noto',
-        '/usr/share/fonts/truetype/wqy',
     ]
     
+    # 支持的字体文件名（按优先级排序）
     font_file_patterns = [
-        'NotoSansCJK-Regular.ttc',
         'NotoSansSC-Regular.otf',
+        'NotoSansCJKsc-Regular.otf',
+        'NotoSansCJK-Regular.ttc',
+        'NotoSansSC-Regular.ttf',
+        'SourceHanSansSC-Regular.otf',
         'wenquanyi_micro_hei.ttf',
         'wqy-microhei.ttc',
         'msyh.ttc',
@@ -92,34 +70,72 @@ def _setup_chinese_font():
                     font_name = prop.get_name()
                     plt.rcParams['font.family'] = [font_name, 'sans-serif']
                     plt.rcParams['axes.unicode_minus'] = False
-                    print(f"[可视化] 加载字体文件: {font_path} → {font_name}")
+                    print(f"[可视化] 加载项目字体: {font_path} → {font_name}")
                     return True
                 except Exception as e:
-                    print(f"[可视化] 加载字体失败 {font_path}: {e}")
+                    print(f"[可视化] 加载项目字体失败 {font_path}: {e}")
     
-    # 兜底：尝试下载Noto Sans CJK（如果有网络）
-    # 注意：Streamlit Cloud环境可能有网络限制，这里仅做尝试
-    try:
-        import urllib.request
-        noto_url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf"
-        cache_dir = os.path.expanduser('~/.cache/matplotlib/fonts')
-        os.makedirs(cache_dir, exist_ok=True)
-        cache_path = os.path.join(cache_dir, 'NotoSansCJKsc-Regular.otf')
-        
-        if os.path.exists(cache_path) and os.path.getsize(cache_path) > 1000000:
-            font_manager.fontManager.addfont(cache_path)
-            plt.rcParams['font.family'] = ['Noto Sans CJK SC', 'sans-serif']
+    # ---- 第2优先级：系统已安装的中文字体 ----
+    chinese_font_names = [
+        'Noto Sans CJK SC',
+        'Noto Sans SC',
+        'Noto Sans CJK JP',
+        'WenQuanYi Micro Hei',
+        'WenQuanYi Zen Hei',
+        'Microsoft YaHei',
+        'SimHei',
+        'PingFang SC',
+        'Heiti SC',
+        'Source Han Sans CN',
+        'Droid Sans Fallback',
+    ]
+    
+    available_fonts = {f.name for f in font_manager.fontManager.ttflist}
+    
+    for font_name in chinese_font_names:
+        if font_name in available_fonts:
+            plt.rcParams['font.family'] = [font_name, 'sans-serif']
             plt.rcParams['axes.unicode_minus'] = False
-            print(f"[可视化] 使用缓存中文字体")
+            print(f"[可视化] 使用系统中文字体: {font_name}")
             return True
-        # 不主动下载（可能耗时/失败），仅检查缓存
-    except Exception:
-        pass
     
-    # 最终降级：使用默认sans-serif，中文可能显示为方框但不报错
+    # ---- 第3优先级：扫描系统字体目录 ----
+    system_font_dirs = [
+        '/usr/share/fonts/opentype/noto',
+        '/usr/share/fonts/truetype/wqy',
+        '/usr/share/fonts/noto-cjk',
+        '/usr/share/fonts/truetype/noto',
+        '/System/Library/Fonts',
+        'C:/Windows/Fonts',
+    ]
+    
+    for font_dir in system_font_dirs:
+        if not os.path.isdir(font_dir):
+            continue
+        try:
+            for fname in os.listdir(font_dir):
+                if fname.lower().endswith(('.otf', '.ttf', '.ttc')):
+                    fpath = os.path.join(font_dir, fname)
+                    try:
+                        font_manager.fontManager.addfont(fpath)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    
+    # 重新扫描后再检查一次
+    available_fonts = {f.name for f in font_manager.fontManager.ttflist}
+    for font_name in chinese_font_names:
+        if font_name in available_fonts:
+            plt.rcParams['font.family'] = [font_name, 'sans-serif']
+            plt.rcParams['axes.unicode_minus'] = False
+            print(f"[可视化] 使用系统中文字体(扫描后): {font_name}")
+            return True
+    
+    # ---- 最终降级：使用默认sans-serif，中文可能显示为方框但不报错 ----
     plt.rcParams['font.family'] = ['DejaVu Sans', 'sans-serif']
     plt.rcParams['axes.unicode_minus'] = False
-    print(f"[可视化] 警告：未找到中文字体，中文可能显示异常")
+    print(f"[可视化] 警告：未找到中文字体，图表中文可能显示为方框（建议在项目fonts/目录放置中文字体文件）")
     return False
 
 
@@ -209,7 +225,7 @@ def draw_shot_map(df, info, stats, output_path=None):
     if len(teams) < 2:
         return None
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
     fig.suptitle('射门位置图', fontsize=16, color=TEXT_COLOR, y=0.98)
 
     for idx, (team, color) in enumerate(zip(teams, [TEAM1_COLOR, TEAM2_COLOR])):
@@ -302,7 +318,7 @@ def draw_shot_map(df, info, stats, output_path=None):
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 射门位置图 → {output_path}")
         return output_path
@@ -319,7 +335,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
     if len(teams) < 2:
         return None
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
     fig.suptitle('传球网络图', fontsize=16, color=TEXT_COLOR, y=0.98)
 
     for idx, (team, color) in enumerate(zip(teams, [TEAM1_COLOR, TEAM2_COLOR])):
@@ -408,7 +424,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 传球网络图 → {output_path}")
         return output_path
@@ -435,7 +451,7 @@ def draw_shot_comparison(stats, output_path=None):
     x = np.arange(len(metrics))
     width = 0.35
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(12, 8))
     bars1 = ax.bar(x - width/2, v1, width, label=t1, color=TEAM1_COLOR, alpha=0.85, edgecolor='none')
     bars2 = ax.bar(x + width/2, v2, width, label=t2, color=TEAM2_COLOR, alpha=0.85, edgecolor='none')
 
@@ -462,7 +478,7 @@ def draw_shot_comparison(stats, output_path=None):
     plt.tight_layout()
 
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 射门对比 → {output_path}")
         return output_path
@@ -479,7 +495,7 @@ def draw_xg_flow(df, info, stats, output_path=None):
     if len(teams) < 2:
         return None
 
-    fig, ax = plt.subplots(figsize=(12, 5))
+    fig, ax = plt.subplots(figsize=(12, 8))
 
     for team, color in zip(teams, [TEAM1_COLOR, TEAM2_COLOR]):
         shots = df[(df['team'] == team) & (df['type'] == 'Shot')].copy()
@@ -541,7 +557,7 @@ def draw_xg_flow(df, info, stats, output_path=None):
     plt.tight_layout()
 
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] xG累积曲线 → {output_path}")
         return output_path
@@ -568,7 +584,7 @@ def draw_possession_timeline(df, info, stats, output_path=None, window=5):
         # 没有possession_team，退化为用事件数代替
         return _draw_possession_by_events(df, info, stats, output_path, window)
 
-    fig, ax = plt.subplots(figsize=(12, 5))
+    fig, ax = plt.subplots(figsize=(12, 8))
 
     max_min = int(df[time_col].max())
     bins = list(range(0, max_min + window, window))
@@ -592,7 +608,7 @@ def draw_possession_timeline(df, info, stats, output_path=None, window=5):
     plt.tight_layout()
 
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 控球时间线 → {output_path}")
         return output_path
@@ -616,7 +632,7 @@ def _draw_possession_by_events(df, info, stats, output_path=None, window=5):
     if time_col is None:
         return None
 
-    fig, ax = plt.subplots(figsize=(12, 5))
+    fig, ax = plt.subplots(figsize=(12, 8))
 
     max_min = int(df[time_col].max())
     bins = list(range(0, max_min + window, window))
@@ -640,7 +656,7 @@ def _draw_possession_by_events(df, info, stats, output_path=None, window=5):
     plt.tight_layout()
 
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 节奏时间线 → {output_path}")
         return output_path
@@ -679,7 +695,7 @@ def draw_stats_bar(stats, output_path=None):
     y = np.arange(len(labels))
     height = 0.35
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(12, 8))
     bars1 = ax.barh(y - height/2, v1, height, label=t1, color=TEAM1_COLOR, alpha=0.85)
     bars2 = ax.barh(y + height/2, v2, height, label=t2, color=TEAM2_COLOR, alpha=0.85)
 
@@ -704,7 +720,7 @@ def draw_stats_bar(stats, output_path=None):
     plt.tight_layout()
 
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 核心数据对比 → {output_path}")
         return output_path
@@ -734,7 +750,7 @@ def draw_pressure_heatmap(df, info, stats, team=None, output_path=None, bins=(12
     target_teams = [team] if team else teams
     n = len(target_teams)
 
-    fig, axes = plt.subplots(1, n, figsize=(7 * n, 5))
+    fig, axes = plt.subplots(1, n, figsize=(14, 7))
     if n == 1:
         axes = [axes]
 
@@ -847,7 +863,7 @@ def draw_pressure_heatmap(df, info, stats, team=None, output_path=None, bins=(12
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 防守热力图 → {output_path}")
         return output_path
@@ -900,7 +916,7 @@ def draw_tactical_radar(df, info, stats, output_path=None):
     t2_values_closed = t2_values + t2_values[:1]
     angles_closed = angles + angles[:1]
     
-    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
+    fig, ax = plt.subplots(figsize=(12, 8), subplot_kw=dict(polar=True))
     fig.patch.set_facecolor(BG_COLOR)
     ax.set_facecolor(PITCH_COLOR)
     
@@ -941,7 +957,7 @@ def draw_tactical_radar(df, info, stats, output_path=None):
     plt.tight_layout()
     
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 战术风格雷达图 → {output_path}")
         return output_path
@@ -975,7 +991,7 @@ def draw_line_breaks(df, info, stats, output_path=None):
     if t1 not in lb_data or t2 not in lb_data:
         return None
     
-    fig = plt.figure(figsize=(12, 7))
+    fig = plt.figure(figsize=(16, 10))
     fig.patch.set_facecolor(BG_COLOR)
     
     # 上半部分：分组柱状图
@@ -1077,7 +1093,7 @@ def draw_line_breaks(df, info, stats, output_path=None):
     plt.tight_layout()
     
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 防线穿透分析 → {output_path}")
         return output_path
@@ -1116,7 +1132,7 @@ def draw_cross_tactics(df, info, stats, output_path=None):
     cn_names = cross_data[t1].get('type_names_cn', {})
     cross_type_colors = ['#00f5c4', '#4da6ff', '#f0883e', '#a78bfa', '#34d399', '#fbbf24']
     
-    fig = plt.figure(figsize=(12, 6))
+    fig = plt.figure(figsize=(16, 10))
     fig.patch.set_facecolor(BG_COLOR)
     
     # 左侧饼图：T1
@@ -1203,7 +1219,7 @@ def draw_cross_tactics(df, info, stats, output_path=None):
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])
     
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 传中战术分析 → {output_path}")
         return output_path
@@ -1242,7 +1258,7 @@ def draw_physical_zones(df, info, stats, output_path=None):
     cn_names = phys_data[t1].get('zone_names_cn', {})
     zone_colors = ['#6b7280', '#3b82f6', '#22c55e', '#f59e0b', '#ef4444']
     
-    fig = plt.figure(figsize=(13, 7))
+    fig = plt.figure(figsize=(16, 10))
     fig.patch.set_facecolor(BG_COLOR)
     
     # 上半部分：堆叠柱状图
@@ -1371,7 +1387,7 @@ def draw_physical_zones(df, info, stats, output_path=None):
     plt.tight_layout()
     
     if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
         plt.close(fig)
         print(f"[可视化] 体能五分区图 → {output_path}")
         return output_path
