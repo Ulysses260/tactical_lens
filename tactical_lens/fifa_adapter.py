@@ -124,40 +124,74 @@ def _estimate_xg_per_shot(shots_df, total_xg):
 
 def _derive_formation(lineups_df, team):
     """从首发阵容位置推导阵型
-    
-    支持具体位置名（RB/CB/CDM/CM/ST等）到防线的映射
+    支持：英文缩写(RB/CB/ST)、中文(后卫/前锋)、位置大类(DF/MF/FW)
     """
-    starters = lineups_df[
-        (lineups_df['team'] == team) & 
-        (lineups_df['role'] == 'starting')
-    ]
+    # 尝试多种role字段值
+    role_variants = ['starting', 'Starting XI', '首发', 'Starter', 'start', 'Starting']
+    role_col = None
+    for col in lineups_df.columns:
+        if col.lower() in ['role', 'position_type', 'type', 'status']:
+            role_col = col
+            break
+    
+    if role_col:
+        starters = None
+        for rv in role_variants:
+            mask = lineups_df[role_col].astype(str).str.strip().str.lower() == rv.lower()
+            candidate = lineups_df[(lineups_df['team'] == team) & mask]
+            if len(candidate) >= 5:  # 至少5个才算匹配上
+                starters = candidate
+                break
+        if starters is None:
+            # 兜底：取该队前11个
+            starters = lineups_df[lineups_df['team'] == team].head(11)
+    else:
+        # 没有role列，直接取前11
+        starters = lineups_df[lineups_df['team'] == team].head(11)
+    
     if starters.empty:
         return 'N/A'
     
-    # 具体位置到防线位置的映射
-    pos_map = {
+    # 找position列
+    pos_col = None
+    for col in ['position', 'pos', '位置', 'role']:
+        if col in starters.columns:
+            pos_col = col
+            break
+    
+    if pos_col is None:
+        return 'N/A'
+    
+    # 防线位置映射（支持缩写、中文、英文全称）
+    def classify_position(pos_str):
+        pos = str(pos_str).strip().lower()
         # 门将
-        'GK': 'GK',
+        if pos in ['gk', 'goalkeeper', '门将', '守门员']:
+            return 'GK'
         # 后卫
-        'RB': 'DF', 'LB': 'DF', 'CB': 'DF', 'RCB': 'DF', 'LCB': 'DF',
-        'RWB': 'DF', 'LWB': 'DF',
-        # 中场
-        'CDM': 'MF', 'CM': 'MF', 'RCM': 'MF', 'LCM': 'MF',
-        'CAM': 'MF', 'RM': 'MF', 'LM': 'MF', 'RAM': 'MF', 'LAM': 'MF',
+        df_keywords = ['defender', '后卫', 'back', 'cb', 'rb', 'lb', 'rcb', 'lcb', 
+                       'rwb', 'lwb', 'sw', 'sweeper', 'df']
+        if any(k in pos for k in df_keywords):
+            return 'DF'
         # 前锋
-        'ST': 'FW', 'CF': 'FW', 'RS': 'FW', 'LS': 'FW',
-        'RW': 'FW', 'LW': 'FW', 'RF': 'FW', 'LF': 'FW',
-        # 通用兜底
-        'DF': 'DF', 'MF': 'MF', 'FW': 'FW',
-    }
+        fw_keywords = ['forward', '前锋', 'striker', 'st', 'cf', 'wing', 'rw', 'lw',
+                       'rf', 'lf', 'rs', 'ls', 'fw']
+        if any(k in pos for k in fw_keywords):
+            return 'FW'
+        # 中场（默认兜底）
+        mf_keywords = ['midfielder', '中场', 'midfield', 'cm', 'cdm', 'cam', 'rm', 'lm',
+                       'rcm', 'lcm', 'ram', 'lam', 'mf']
+        if any(k in pos for k in mf_keywords):
+            return 'MF'
+        # 完全匹配不到的，按数量分布兜底归中场
+        return 'MF'
     
     df_count = 0
     mf_count = 0
     fw_count = 0
     
     for _, row in starters.iterrows():
-        pos = str(row.get('position', '')).strip().upper()
-        line = pos_map.get(pos, 'MF')  # 默认归为中场
+        line = classify_position(row[pos_col])
         if line == 'DF':
             df_count += 1
         elif line == 'MF':
@@ -174,7 +208,6 @@ def _derive_formation(lineups_df, team):
         formation_parts.append(str(fw_count))
     
     return '-'.join(formation_parts) if formation_parts else 'N/A'
-
 
 # ========== 主适配器函数 ==========
 
@@ -380,16 +413,26 @@ def load_fifa_from_csv(csv_dir, match_name=None):
                 (attempts_df['delivery_type'] == 'Corner')
             ]
             corners_count[team] = len(team_corners)
-    
-    # ---- 步骤8：防守数据从defense表汇总 ----
+       
+      # ---- 步骤8：防守数据从defense表汇总（尝试多个字段名）----
     fouls_count = {team: 0 for team in teams}
     if not defense_df.empty:
+        # 找犯规列
+        foul_col = None
+        for col in defense_df.columns:
+            col_lower = col.lower()
+            if 'foul' in col_lower or '犯规' in col_lower or 'fouls_committed' in col_lower:
+                foul_col = col
+                break
         for team in teams:
             team_def = defense_df[defense_df['team'] == team]
-            if not team_def.empty and 'fouls' in team_def.columns:
-                fouls_count[team] = int(team_def['fouls'].sum())
-    
-    # ---- 步骤9：构建stats字典 ----
+            if not team_def.empty and foul_col:
+                try:
+                    fouls_count[team] = int(team_def[foul_col].sum())
+                except (ValueError, TypeError):
+                    pass
+   
+      # ---- 步骤9：构建stats字典 ----
     stats = {}
     for team in teams:
         ts = team_stats[team]
