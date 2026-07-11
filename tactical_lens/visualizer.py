@@ -155,12 +155,9 @@ def draw_shot_map(df, info, stats, output_path=None):
     return fig
 
 
-# ========== 传球网络图 ==========
-def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
+def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
     """传球网络图：节点=球员位置，边=传球次数
-
-    StatsBomb源：从事件流计算平均坐标
-    FIFA源：从info['fifa_extra']读取传球网络数据，按位置分层布局
+    FIFA数据模式：从info['fifa_passing_network']和info['fifa_lineups']读取
     """
     teams = list(stats.keys())
     if len(teams) < 2:
@@ -169,172 +166,169 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     fig.suptitle('传球网络图', fontsize=16, color=TEXT_COLOR, y=0.98)
 
-    # ===== FIFA数据源判断
+    # 判断是否FIFA模式
     is_fifa = info.get('source') == 'fifa'
 
     for idx, (team, color) in enumerate(zip(teams, [TEAM1_COLOR, TEAM2_COLOR])):
         ax = axes[idx]
         draw_pitch(ax)
 
+        # ===== FIFA模式：从info读传球网络和阵容数据 =====
         if is_fifa:
-            # ===== FIFA模式：从传球网络CSV数据画图 =====
-            fifa_extra = info.get('fifa_extra', {})
-            pn_records = fifa_extra.get('passing_network_records', [])
-            player_positions = fifa_extra.get('player_positions', {}).get(team, {})
-
-            if not pn_records or not player_positions:
-                ax.set_title(f'{team}\n（无传球网络数据）', fontsize=12, color=color, pad=10)
+            pn_data = info.get('fifa_passing_network', {}).get(team, [])
+            lineups = info.get('fifa_lineups', [])
+            team_lineups = [p for p in lineups if p.get('team') == team]
+            
+            if not pn_data or not team_lineups:
+                ax.set_title(f'{team}\n（传球网络数据不足）', fontsize=12, color=color, pad=10)
                 continue
 
-            # 筛选本队传球对
-            team_pairs = []
-            player_pass_total = {}
-            for rec in pn_records:
-                # 自动识别字段
-                rec_team = rec.get('team', rec.get('team_name', ''))
-                if rec_team != team:
-                    continue
-                p_from = rec.get('player_from', rec.get('from_player', rec.get('player', '')))
-                p_to = rec.get('player_to', rec.get('to_player', rec.get('connected_player', '')))
-                passes = rec.get('passes', rec.get('pass_count', rec.get('count', 0)))
-                try:
-                    passes = int(passes)
-                except (ValueError, TypeError):
-                    continue
-                if passes <= 0 or not p_from or not p_to:
-                    continue
-                team_pairs.append((p_from, p_to, passes))
-                player_pass_total[p_from] = player_pass_total.get(p_from, 0) + passes
-                player_pass_total[p_to] = player_pass_total.get(p_to, 0) + passes
-
-            if not team_pairs:
-                ax.set_title(f'{team}\n（无传球网络数据）', fontsize=12, color=color, pad=10)
-                continue
-
-            # 按位置分层布局：GK在最后（x=10），DF(x=30)，MF(x=60)，FW(x=90)
-            line_x = {'GK': 10, 'DF': 30, 'MF': 60, 'FW': 90}
-            line_players = {'GK': [], 'DF': [], 'MF': [], 'FW': []}
-
-            all_players = set()
-            for p_from, p_to, _ in team_pairs:
-                all_players.add(p_from)
-                all_players.add(p_to)
-
-            for p in all_players:
-                line = player_positions.get(p, 'MF')
-                if line not in line_players:
-                    line = 'MF'
-                line_players[line].append(p)
-
-            # 每层内按y方向均匀分布
-            player_xy = {}
-            for line, players in line_players.items():
-                if not players:
-                    continue
-                x_pos = line_x[line]
-                n = len(players)
-                # 按传球量排序，方便阅读
-                players_sorted = sorted(players, key=lambda p: player_pass_total.get(p, 0), reverse=True)
-                for i, p in enumerate(players_sorted):
-                    if n == 1:
-                        y_pos = 40
-                    else:
-                        y_pos = 15 + (70 - 15) * i / (n - 1)
-                    player_xy[p] = (x_pos, y_pos)
-
-            # 画边
-            max_passes = max(p for _, _, p in team_pairs) if team_pairs else 1
-            for p_from, p_to, cnt in team_pairs:
-                if cnt < min_passes:
-                    continue
-                if p_from not in player_xy or p_to not in player_xy:
-                    continue
-                x1, y1 = player_xy[p_from]
-                x2, y2 = player_xy[p_to]
-                lw = max(cnt / max(max_passes / 4, 0.5),0.5)
-                alpha = min(0.3 + cnt / max_passes, 0.75)
-                # 用曲线连接更好看
-                from matplotlib.patches import FancyArrowPatch
-                arrow = FancyArrowPatch(
-                    (x1, y1), (x2, y2),
-                    arrowstyle='-',
-                    color=color,
-                    lw=lw,
-                    alpha=alpha,
-                    connectionstyle="arc3,rad=0.1",
-                    zorder=2
-                )
-                ax.add_patch(arrow)
-
-            # 画节点
-            max_total = max(player_pass_total.values()) if player_pass_total else 1
-            for player, (x, y) in player_xy.items():
-                cnt = player_pass_total.get(player, 1)
-                size = max(80 + cnt / max(max_total / 5, 1) * 120, 150)
-                ax.scatter(x, y, s=size, c=color, edgecolors='white',
-                           linewidths=0.8, zorder=4, alpha=0.9)
-                short_name = player.split()[-1] if ' ' in str(player) else str(player)
-                # 中文名就显示前两个字
-                if len(str(player)) <= 4:
-                    short_name = str(player)[:2] if len(str(player)) > 4 else str(player)
-                ax.annotate(short_name, (x, y),
-                            textcoords="offset points", xytext=(0, 10),
-                            fontsize=7, ha='center', color=TEXT_COLOR, alpha=0.9)
-
-            formation = stats[team].get('formation', 'N/A')
-            acc = stats[team]['pass_accuracy']
-            ax.set_title(f'{team} | {formation}\n传球成功率 {acc:.0f}%',
-                          fontsize=12, color=color, pad=10)
-
-        else:
-            # ===== StatsBomb模式：原逻辑不变
-            team_passes = df[(df['team'] == team) & (df['type'] == 'Pass')].copy()
-            if team_passes.empty:
-                ax.set_title(f'{team}\n（无传球数据）', fontsize=12, color=color, pad=10)
-                continue
-            if 'player' not in team_passes.columns:
-                ax.set_title(f'{team}\n（缺少球员字段）', fontsize=12, color=color, pad=10)
-                continue
-
-            valid = team_passes.dropna(subset=['x', 'y']) if 'x' in team_passes.columns else pd.DataFrame()
-            if valid.empty:
-                ax.set_title(f'{team}\n（缺少坐标数据）', fontsize=12, color=color, pad=10)
-                continue
-
-            player_pos = valid.groupby('player').agg({'x': 'mean', 'y': 'mean'}).to_dict('index')
-            player_pass_count = valid.groupby('player').size().to_dict()
-
-            pass_pairs = {}
-            completed = team_passes[team_passes['pass_outcome'].isna()].copy()
-            if 'pass_recipient' in completed.columns:
-                for _, row in completed.dropna(subset=['pass_recipient']).iterrows():
-                    pair = (row['player'], row['pass_recipient'])
-                    pass_pairs[pair] = pass_pairs.get(pair, 0) + 1
-
-            for (p1, p2), cnt in pass_pairs.items():
+            # 球员位置映射（按防线分层）
+            def get_line(pos_str):
+                pos = str(pos_str).lower()
+                if pos in ['gk', 'goalkeeper', '门将', '守门员']:
+                    return 'GK'
+                df_kw = ['defender', '后卫', 'back', 'cb', 'rb', 'lb', 'rcb', 'lcb', 'rwb', 'lwb', 'df']
+                if any(k in pos for k in df_kw):
+                    return 'DF'
+                fw_kw = ['forward', '前锋', 'striker', 'st', 'cf', 'wing', 'rw', 'lw', 'rf', 'lf', 'fw']
+                if any(k in pos for k in fw_kw):
+                    return 'FW'
+                return 'MF'
+            
+            # 找position列名
+            pos_col_name = 'position'
+            if team_lineups and 'position' not in team_lineups[0]:
+                for k in team_lineups[0].keys():
+                    if k.lower() in ['pos', '位置', 'role']:
+                        pos_col_name = k
+                        break
+            
+            # 按防线分层布局
+            line_x = {'GK': 8, 'DF': 28, 'MF': 60, 'FW': 92}
+            line_counts = {'GK': 0, 'DF': 0, 'MF': 0, 'FW': 0}
+            
+            # 先统计每条线的人数
+            player_line = {}
+            for p in team_lineups:
+                pos = p.get(pos_col_name, 'MF')
+                line = get_line(pos)
+                player_line[p.get('player_name', '')] = line
+                line_counts[line] += 1
+            
+            # 计算每个球员的y坐标（在防线内均匀分布）
+            player_pos = {}
+            line_idx = {'GK': 0, 'DF': 0, 'MF': 0, 'FW': 0}
+            for p in team_lineups:
+                name = p.get('player_name', '')
+                line = player_line.get(name, 'MF')
+                cnt = line_counts[line]
+                if cnt > 0:
+                    y = 10 + (70 / max(cnt, 1)) * (line_idx[line] + 0.5)
+                else:
+                    y = 40
+                x = line_x[line]
+                player_pos[name] = (x, y)
+                line_idx[line] += 1
+            
+            # 传球量（每个球员总传球数）
+            player_pass_count = {}
+            for pair in pn_data:
+                p1 = pair.get('player_from', '')
+                p2 = pair.get('player_to', '')
+                cnt = int(pair.get('passes', pair.get('count', 1)))
+                player_pass_count[p1] = player_pass_count.get(p1, 0) + cnt
+            
+            # 画边（用曲线）
+            max_passes = max([int(p.get('passes', p.get('count', 1))) for p in pn_data]) if pn_data else 1
+            for pair in pn_data:
+                p1 = pair.get('player_from', '')
+                p2 = pair.get('player_to', '')
+                cnt = int(pair.get('passes', pair.get('count', 1)))
                 if cnt < min_passes:
                     continue
                 if p1 in player_pos and p2 in player_pos:
-                    x1, y1 = player_pos[p1]['x'], player_pos[p1]['y']
-                    x2, y2 = player_pos[p2]['x'], player_pos[p2]['y']
-                    lw = min(cnt / 3, 5)
-                    alpha = min(0.3 + cnt / 30, 0.8)
-                    ax.plot([x1, x2], [y1, y2], color=color, lw=lw, alpha=alpha, zorder=2)
-
-            for player, pos in player_pos.items():
-                cnt = player_pass_count.get(player, 1)
-                size = max(cnt * 3, 50)
-                ax.scatter(pos['x'], pos['y'], s=size, c=color, edgecolors='white',
+                    x1, y1 = player_pos[p1]
+                    x2, y2 = player_pos[p2]
+                    lw = max(cnt / max(max_passes / 4, 0.5), 0.5)
+                    alpha = min(0.2 + cnt / max(max_passes, 1), 0.7)
+                    # 曲线连接
+                    mid_x = (x1 + x2) / 2
+                    mid_y = (y1 + y2) / 2 + (5 if y1 != y2 else 0)
+                    from matplotlib.patches import FancyArrowPatch
+                    path = FancyArrowPatch((x1, y1), (x2, y2),
+                                           connectionstyle=f"arc3,rad=0.1",
+                                           color=color, lw=lw, alpha=alpha,
+                                           arrowstyle="-", zorder=2)
+                    ax.add_patch(path)
+            
+            # 画节点
+            for name, (x, y) in player_pos.items():
+                cnt = player_pass_count.get(name, 1)
+                size = max(cnt * 2, 80)
+                ax.scatter(x, y, s=size, c=color, edgecolors='white',
                            linewidths=0.8, zorder=4, alpha=0.9)
-                short_name = player.split()[-1] if ' ' in str(player) else str(player)
-                ax.annotate(short_name, (pos['x'], pos['y']),
-                            textcoords="offset points", xytext=(0, 8),
+                short_name = name.split()[-1] if ' ' in str(name) else str(name)
+                short_name = short_name[:8]  # 限制长度
+                ax.annotate(short_name, (x, y),
+                            textcoords="offset points", xytext=(0, 10),
                             fontsize=7, ha='center', color=TEXT_COLOR, alpha=0.8)
 
             formation = stats[team].get('formation', 'N/A')
             acc = stats[team]['pass_accuracy']
             ax.set_title(f'{team} | {formation}\n传球成功率 {acc:.0f}%',
                           fontsize=12, color=color, pad=10)
+            continue
+
+        # ===== 普通StatsBomb模式：从事件流计算 =====
+        team_passes = df[(df['team'] == team) & (df['type'] == 'Pass')].copy()
+        if team_passes.empty:
+            ax.set_title(f'{team}\n（无传球数据）', fontsize=12, color=color, pad=10)
+            continue
+
+        if 'player' not in team_passes.columns:
+            ax.set_title(f'{team}\n（缺少球员字段）', fontsize=12, color=color, pad=10)
+            continue
+
+        valid = team_passes.dropna(subset=['x', 'y']) if 'x' in team_passes.columns else pd.DataFrame()
+        if valid.empty:
+            ax.set_title(f'{team}\n（缺少坐标数据）', fontsize=12, color=color, pad=10)
+            continue
+
+        player_pos = valid.groupby('player').agg({'x': 'mean', 'y': 'mean'}).to_dict('index')
+        player_pass_count = valid.groupby('player').size().to_dict()
+
+        pass_pairs = {}
+        completed = team_passes[team_passes['pass_outcome'].isna()].copy()
+        if 'pass_recipient' in completed.columns:
+            for _, row in completed.dropna(subset=['pass_recipient']).iterrows():
+                pair = (row['player'], row['pass_recipient'])
+                pass_pairs[pair] = pass_pairs.get(pair, 0) + 1
+
+        for (p1, p2), cnt in pass_pairs.items():
+            if cnt < min_passes:
+                continue
+            if p1 in player_pos and p2 in player_pos:
+                x1, y1 = player_pos[p1]['x'], player_pos[p1]['y']
+                x2, y2 = player_pos[p2]['x'], player_pos[p2]['y']
+                lw = min(cnt / 3, 5)
+                alpha = min(0.3 + cnt / 30, 0.8)
+                ax.plot([x1, x2], [y1, y2], color=color, lw=lw, alpha=alpha, zorder=2)
+
+        for player, pos in player_pos.items():
+            cnt = player_pass_count.get(player, 1)
+            size = max(cnt * 3, 50)
+            ax.scatter(pos['x'], pos['y'], s=size, c=color, edgecolors='white',
+                       linewidths=0.8, zorder=4, alpha=0.9)
+            short_name = player.split()[-1] if ' ' in str(player) else str(player)
+            ax.annotate(short_name, (pos['x'], pos['y']),
+                        textcoords="offset points", xytext=(0, 8),
+                        fontsize=7, ha='center', color=TEXT_COLOR, alpha=0.8)
+
+        formation = stats[team].get('formation', 'N/A')
+        acc = stats[team]['pass_accuracy']
+        ax.set_title(f'{team} | {formation}\n传球成功率 {acc:.0f}%',
+                      fontsize=12, color=color, pad=10)
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
