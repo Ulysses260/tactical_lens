@@ -2,10 +2,12 @@
 app.py — 战术透镜 Streamlit 网页版
 启动：streamlit run app.py
 
-修复说明：
-- 新增图表点击放大功能（每个图表可展开查看大图）
-- 新增FIFA数据ZIP包上传支持（12个CSV打包上传）
-- 保持深色主题风格一致
+v5 更新说明：
+- 新增「FIFA比赛报告(PDF)」直接上传功能 — 最优体验，传一个PDF就完事
+- 新增FIFA PDF解析器 (fifa_pdf_parser.py)，自动解析12个数据表
+- 数据格式选项顺序：FIFA PDF > FIFA ZIP > 单文件CSV
+- 默认选中FIFA PDF
+- 解析失败时友好提示，不崩溃
 """
 import streamlit as st
 import os
@@ -27,6 +29,18 @@ try:
     _HAS_FIFA = True
 except ImportError:
     _HAS_FIFA = False
+
+# 尝试导入FIFA PDF解析器
+try:
+    from fifa_pdf_parser import parse_fifa_pdf
+    _HAS_FIFA_PDF = True
+except ImportError:
+    _HAS_FIFA_PDF = False
+    _FIFA_PDF_IMPORT_ERROR = None
+    try:
+        import pdfplumber  # noqa: F401
+    except ImportError as e:
+        _FIFA_PDF_IMPORT_ERROR = f"缺少pdfplumber依赖: {e}"
 
 
 # ========== 页面配置 ==========
@@ -92,6 +106,12 @@ st.markdown("""
         color: #8b949e;
         margin-top: 8px;
     }
+    /* PDF解析进度提示 */
+    .pdf-parse-info {
+        color: #8b949e;
+        font-size: 0.85rem;
+        margin-top: 4px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -99,33 +119,20 @@ st.markdown("""
 # ========== 侧边栏 ==========
 with st.sidebar:
     st.title("⚽ 战术透镜")
-    st.caption("v4 — 比赛分析报告生成器")
+    st.caption("v5 — 比赛分析报告生成器")
     st.divider()
 
     st.subheader("📂 上传数据")
     
-    # 数据格式选择
-    data_format = st.radio(
-        "数据格式",
-        ["单文件CSV", "FIFA比赛报告(ZIP)"],
-        help="StatsBomb/Catapult/自定义使用单文件；FIFA使用12个CSV打包的ZIP",
-        horizontal=True,
+    # ===== 智能上传：一个框搞定所有格式 =====
+    # 支持多文件，自动识别格式（FIFA PDF / FIFA CSV / StatsBomb / Catapult）
+    uploaded_files = st.file_uploader(
+        "拖拽文件到此处，或点击选择",
+        type=['pdf', 'csv', 'zip'],
+        accept_multiple_files=True,
+        help="支持：FIFA比赛报告PDF、FIFA多文件CSV、StatsBomb事件流CSV、ZIP打包、Catapult体能数据等，自动识别格式"
     )
-    
-    if data_format == "单文件CSV":
-        uploaded_file = st.file_uploader(
-            "上传CSV文件",
-            type=['csv'],
-            help="支持 StatsBomb / Catapult / 自定义CSV格式"
-        )
-        fifa_zip = None
-    else:
-        uploaded_file = None
-        fifa_zip = st.file_uploader(
-            "上传FIFA CSV压缩包",
-            type=['zip'],
-            help="FIFA比赛报告导出的12个CSV文件打包为ZIP上传"
-        )
+    st.caption("💡 一个上传框搞定所有格式，自动识别，无需手动选择")
 
     match_name = st.text_input("比赛名称", value="自定义比赛")
 
@@ -152,6 +159,7 @@ tactical_lens/
 ├── app.py            网页版(当前)
 ├── data_loader.py    数据加载
 ├── fifa_adapter.py   FIFA数据适配器
+├── fifa_pdf_parser.py FIFA PDF解析器
 ├── stats_engine.py   统计引擎
 ├── visualizer.py     可视化引擎
 ├── report_engine.py  报告引擎
@@ -187,29 +195,32 @@ def show_chart_with_zoom(chart_path, chart_title, zoom_level=1.0):
 st.title("⚽ 战术透镜 — 比赛分析报告")
 
 # 判断是否有上传
-has_data = (uploaded_file is not None) or (fifa_zip is not None)
+has_data = uploaded_files is not None and len(uploaded_files) > 0
 
 if not has_data:
-    st.info("👈 在左侧上传数据文件开始分析")
+    st.info("👈 拖拽文件到左侧上传框，自动识别格式，开始分析")
     st.markdown("""
     ---
     ### 支持的数据格式
 
-    | 格式 | 说明 | 关键字段 |
-    |------|------|----------|
-    | **StatsBomb** | 专业赛事事件数据 | type, team, location, shot_statsbomb_xg |
-    | **FIFA比赛报告** | FIFA官方PDF导出数据 | 12个CSV文件（ZIP上传） |
-    | **Catapult** | 体育科学追踪数据 | 距离, 高强度跑, 冲刺 |
-    | **自定义CSV** | 任意比赛数据 | 至少需要 team 列 |
+    | 格式 | 说明 | 特点 |
+    |------|------|------|
+    | **FIFA比赛报告PDF** ⭐ | FIFA官方PDF直接上传，自动解析 | 一个PDF = 12项完整数据 = 11张图表 |
+    | **FIFA多文件CSV** | FIFA导出的CSV文件，有几个传几个 | 缺数据的图表自动降级，不报错 |
+    | **StatsBomb** | 专业赛事事件数据 | 最完整的逐事件分析 |
+    | **Catapult** | 体育科学追踪数据 | 体能分析专用 |
+    | **ZIP打包** | 任意格式打包上传 | 自动解压识别 |
 
     ### 使用流程
-    1. 选择数据格式 → 上传文件
-    2. 选择模板 → 完整/精简/教练版
-    3. 自动生成 → 图表 + 洞察 + 报告
+    1. 拖拽文件到左侧上传框（PDF / CSV / ZIP 都可以）
+    2. 选择报告模板（完整 / 精简 / 教练版）
+    3. 自动识别格式 → 生成图表 + 洞察 + 报告
     
-    ### FIFA数据上传说明
-    FIFA比赛报告导出为12个CSV文件，将它们打包为ZIP后上传。
-    文件名需保持原样（01_match_info.csv ~ 12_passing_network.csv）。
+    ### ⭐ 最推荐：FIFA PDF直接传
+    拿到FIFA Training Centre比赛报告PDF，直接拖进来：
+    - 自动解析比赛信息、阵容、射门、传中、防守、体能等12项数据
+    - 生成战术风格雷达图、防线穿透分析等11张图表
+    - 无需手动转换、无需打包、无需选格式
     """)
     st.stop()
 
@@ -220,62 +231,146 @@ with st.spinner("正在分析..."):
     os.makedirs(output_dir, exist_ok=True)
     
     is_fifa_data = False
+    detected_format = "unknown"
     
-    # ---- 处理FIFA ZIP上传 ----
-    if fifa_zip is not None and _HAS_FIFA:
-        # 解压ZIP
-        zip_path = os.path.join(temp_dir, "fifa_data.zip")
-        with open(zip_path, "wb") as f:
-            f.write(fifa_zip.getbuffer())
+    # ===== 智能识别格式并处理 =====
+    if not uploaded_files or len(uploaded_files) == 0:
+        st.error("请先上传数据文件")
+        st.stop()
+    
+    # 收集所有文件：按扩展名分类
+    pdf_files = [f for f in uploaded_files if f.name.lower().endswith('.pdf')]
+    zip_files = [f for f in uploaded_files if f.name.lower().endswith('.zip')]
+    csv_files = [f for f in uploaded_files if f.name.lower().endswith('.csv')]
+    
+    # ---- 情况1：PDF文件 → FIFA PDF模式 ----
+    if len(pdf_files) > 0:
+        detected_format = "fifa_pdf"
+        if not _HAS_FIFA_PDF or not _HAS_FIFA:
+            st.error(f"❌ PDF解析不可用：{_FIFA_PDF_IMPORT_ERROR if not _HAS_FIFA_PDF else 'FIFA适配器未加载'}")
+            st.stop()
         
+        # 保存第一个PDF（只处理一个）
+        pdf_file = pdf_files[0]
+        pdf_path = os.path.join(temp_dir, "match_report.pdf")
+        with open(pdf_path, "wb") as f:
+            f.write(pdf_file.getbuffer())
+        
+        # 解析PDF
         csv_dir = os.path.join(temp_dir, "fifa_csv")
         os.makedirs(csv_dir, exist_ok=True)
+        parse_result = parse_fifa_pdf(pdf_path, csv_dir)
         
+        if not parse_result['success']:
+            st.error(f"❌ **PDF解析失败**\n\n{parse_result.get('error', '未知错误')}\n\n请确认上传的是FIFA Training Centre比赛报告PDF。")
+            st.stop()
+        
+        # 加载数据
+        try:
+            df, info, stats = load_fifa_from_csv(csv_dir, match_name)
+            is_fifa_data = True
+        except Exception as e:
+            st.error(f"数据加载失败：{e}")
+            st.stop()
+    
+    # ---- 情况2：ZIP文件 → 先解压再判断 ----
+    elif len(zip_files) > 0:
+        # 解压ZIP
+        zip_path = os.path.join(temp_dir, "uploaded.zip")
+        with open(zip_path, "wb") as f:
+            f.write(zip_files[0].getbuffer())
+        
+        extract_dir = os.path.join(temp_dir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            zf.extractall(csv_dir)
+            zf.extractall(extract_dir)
         
-        # 检查是否为FIFA目录（可能解压在子目录）
-        if not is_fifa_csv_dir(csv_dir):
-            # 查找子目录
+        # 判断是否为FIFA CSV目录
+        csv_dir = extract_dir
+        if _HAS_FIFA and not is_fifa_csv_dir(csv_dir):
             for item in os.listdir(csv_dir):
                 sub_path = os.path.join(csv_dir, item)
                 if os.path.isdir(sub_path) and is_fifa_csv_dir(sub_path):
                     csv_dir = sub_path
                     break
         
-        if is_fifa_csv_dir(csv_dir):
-            # 使用FIFA适配器加载
-            df, info, stats = load_fifa_from_csv(csv_dir, match_name)
-            is_fifa_data = True
+        if _HAS_FIFA and is_fifa_csv_dir(csv_dir):
+            detected_format = "fifa_zip"
+            try:
+                df, info, stats = load_fifa_from_csv(csv_dir, match_name)
+                is_fifa_data = True
+            except Exception as e:
+                st.error(f"数据加载失败：{e}")
+                st.stop()
         else:
-            st.error("ZIP文件中未找到有效的FIFA CSV数据，请确认文件结构正确")
-            st.stop()
-    
-    # ---- 处理单文件CSV上传 ----
-    elif uploaded_file is not None:
-        csv_path = os.path.join(temp_dir, "match_data.csv")
-        with open(csv_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
-        # 1. 加载数据
-        try:
+            # 不是FIFA，当单文件CSV处理（找第一个CSV）
+            detected_format = "csv"
+            csv_list = [f for f in os.listdir(extract_dir) if f.lower().endswith('.csv')]
+            if not csv_list:
+                st.error("ZIP中未找到CSV文件")
+                st.stop()
+            csv_path = os.path.join(extract_dir, csv_list[0])
             result = auto_load(csv_path, match_name=match_name)
             if len(result) == 3:
-                df, info, stats = result  # FIFA格式（已预计算stats）
+                df, info, stats = result
                 is_fifa_data = True
             else:
                 df, info = result
-                is_fifa_data = False
+                stats = compute_match_stats(df, info)
+    
+    # ---- 情况3：多个CSV文件 → 先判断是不是FIFA一套 ----
+    elif len(csv_files) > 1:
+        # 保存到临时目录
+        csv_dir = os.path.join(temp_dir, "fifa_csv")
+        os.makedirs(csv_dir, exist_ok=True)
+        for f in csv_files:
+            file_path = os.path.join(csv_dir, f.name)
+            with open(file_path, "wb") as wf:
+                wf.write(f.getbuffer())
+        
+        # 判断是否为FIFA格式
+        if _HAS_FIFA and is_fifa_csv_dir(csv_dir):
+            detected_format = "fifa_multi"
+            try:
+                df, info, stats = load_fifa_from_csv(csv_dir, match_name)
+                is_fifa_data = True
+            except Exception as e:
+                st.error(f"数据加载失败：{e}")
+                st.stop()
+        else:
+            # 不是FIFA多文件，取第一个CSV处理
+            detected_format = "csv_multi_first"
+            first_csv = os.path.join(csv_dir, csv_files[0].name)
+            result = auto_load(first_csv, match_name=match_name)
+            if len(result) == 3:
+                df, info, stats = result
+                is_fifa_data = True
+            else:
+                df, info = result
+                stats = compute_match_stats(df, info)
+    
+    # ---- 情况4：单个CSV文件 → 自动识别 ----
+    elif len(csv_files) == 1:
+        detected_format = "csv_single"
+        csv_path = os.path.join(temp_dir, "match_data.csv")
+        with open(csv_path, "wb") as f:
+            f.write(csv_files[0].getbuffer())
+        
+        try:
+            result = auto_load(csv_path, match_name=match_name)
+            if len(result) == 3:
+                df, info, stats = result
+                is_fifa_data = True
+                detected_format = "fifa_single"
+            else:
+                df, info = result
+                stats = compute_match_stats(df, info)
         except Exception as e:
             st.error(f"数据加载失败：{e}")
             st.stop()
-        
-        # 2. 计算统计（仅非FIFA格式）
-        if not is_fifa_data:
-            stats = compute_match_stats(df, info)
     
     else:
-        st.error("未识别的数据格式")
+        st.error("未识别到有效数据文件，请上传PDF、CSV或ZIP格式")
         st.stop()
 
     # 3. 生成洞察
@@ -310,9 +405,16 @@ if len(teams) >= 2:
     </div>
     """, unsafe_allow_html=True)
     
-    # 数据源标识
+    # 数据源标识（智能识别结果）
     if is_fifa_data:
-        st.caption("📊 数据来源：FIFA比赛报告（聚合数据，部分功能为近似值）")
+        format_labels = {
+            'fifa_pdf': 'FIFA比赛报告（PDF自动解析）',
+            'fifa_zip': 'FIFA比赛报告（ZIP导入）',
+            'fifa_multi': 'FIFA比赛报告（多文件CSV导入）',
+            'fifa_single': 'FIFA比赛报告（单文件CSV）',
+        }
+        label = format_labels.get(detected_format, 'FIFA比赛报告')
+        st.caption(f"📊 数据来源：{label}")
     else:
         st.caption("📊 数据来源：事件流数据（完整功能）")
 
