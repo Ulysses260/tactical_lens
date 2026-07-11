@@ -6,7 +6,7 @@ visualizer.py — 可视化引擎
 import os
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')  # 无头模式，服务器环境不出窗口
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.colors import LinearSegmentedColormap
@@ -37,49 +37,32 @@ plt.rcParams.update({
 
 # ========== 球场绘制 ==========
 def draw_pitch(ax, pitch_type='statsbomb'):
-    """在ax上画标准足球场
-    StatsBomb坐标系：x∈[0,120], y∈[0,80]
-    """
+    """在ax上画标准足球场"""
     if pitch_type == 'statsbomb':
-        # 外框
         ax.plot([0, 0, 120, 120, 0], [0, 80, 80, 0, 0], color=LINE_COLOR, lw=1.5)
-        # 中线
         ax.plot([60, 60], [0, 80], color=LINE_COLOR, lw=1)
-        # 中圈
         circle = plt.Circle((60, 40), 9.15, fill=False, color=LINE_COLOR, lw=1)
         ax.add_patch(circle)
-        # 中点
         ax.plot(60, 40, 'o', color=LINE_COLOR, markersize=3)
-        # 左禁区
         ax.plot([0, 18, 18, 0], [18, 18, 62, 62], color=LINE_COLOR, lw=1)
-        # 左小禁区
         ax.plot([0, 6, 6, 0], [30, 30, 50, 50], color=LINE_COLOR, lw=1)
-        # 左罚球点
         ax.plot(12, 40, 'o', color=LINE_COLOR, markersize=3)
-        # 左罚球弧
         left_arc = patches.Arc((12, 40), 2*9.15, 2*9.15, angle=0, theta1=-53, theta2=53, color=LINE_COLOR, lw=1)
         ax.add_patch(left_arc)
-        # 右禁区
         ax.plot([120, 102, 102, 120], [18, 18, 62, 62], color=LINE_COLOR, lw=1)
-        # 右小禁区
         ax.plot([120, 114, 114, 120], [30, 30, 50, 50], color=LINE_COLOR, lw=1)
-        # 右罚球点
         ax.plot(108, 40, 'o', color=LINE_COLOR, markersize=3)
-        # 右罚球弧
         right_arc = patches.Arc((108, 40), 2*9.15, 2*9.15, angle=0, theta1=127, theta2=233, color=LINE_COLOR, lw=1)
         ax.add_patch(right_arc)
-        # 角球弧
         for cx, cy, t1, t2 in [(0, 0, 0, 90), (0, 80, 270, 360), (120, 0, 90, 180), (120, 80, 180, 270)]:
             arc = patches.Arc((cx, cy), 2, 2, angle=0, theta1=t1, theta2=t2, color=LINE_COLOR, lw=1)
             ax.add_patch(arc)
-        # 球门
         ax.plot([-2, 0], [36, 36], color=LINE_COLOR, lw=1.5)
         ax.plot([-2, 0], [44, 44], color=LINE_COLOR, lw=1.5)
         ax.plot([-2, -2], [36, 44], color=LINE_COLOR, lw=1.5)
         ax.plot([120, 122], [36, 36], color=LINE_COLOR, lw=1.5)
         ax.plot([120, 122], [44, 44], color=LINE_COLOR, lw=1.5)
         ax.plot([122, 122], [36, 44], color=LINE_COLOR, lw=1.5)
-
         ax.set_xlim(-5, 125)
         ax.set_ylim(-5, 85)
         ax.set_aspect('equal')
@@ -105,9 +88,58 @@ def draw_shot_map(df, info, stats, output_path=None):
             ax.set_title(f'{team}\n（无射门数据）', fontsize=12, color=color, pad=10)
             continue
 
-        # 坐标
-        xs = shots['x'].values if 'x' in shots.columns else []
-        ys = shots['y'].values if 'y' in shots.columns else []
+        has_coords = False
+        if 'x' in shots.columns and 'y' in shots.columns:
+            valid = shots.dropna(subset=['x', 'y'])
+            if not valid.empty:
+                has_coords = True
+
+        if not has_coords:
+            # FIFA模式：无坐标，在球门前按xG大小展示射门分布
+            goals_count = stats[team]['goals']
+            xg_total = stats[team]['xg']
+            shots_total = stats[team]['shots_total']
+            ax.text(60, 70, f'总射门: {shots_total} 次', ha='center', fontsize=12, color=TEXT_COLOR)
+            ax.text(60, 62, f'射正: {stats[team]["shots_on_target"]} 次', ha='center', fontsize=11, color=color)
+            ax.text(60, 54, f'进球: {goals_count}', ha='center', fontsize=11, color=GOAL_COLOR)
+            ax.text(60, 46, f'xG: {xg_total:.2f}', ha='center', fontsize=11, color=color)
+            
+            # 按射门结果在禁区内按类型分堆展示
+            outcome_groups = shots.groupby('shot_outcome')
+            base_x = 100 if idx == 0 else 20  # 分别在左右半场
+            y_positions = {'Goal': 55, 'Saved': 45, 'Blocked': 35, 'Off T': 25, 'Unknown': 15}
+            
+            for outcome, group in outcome_groups:
+                y_base = y_positions.get(outcome, 20)
+                n = len(group)
+                cols = min(n, 5)
+                for i in range(n):
+                    row = i // cols
+                    col = i % cols
+                    x = base_x + (col - cols/2) * 4
+                    y = y_base + row * 3
+                    xg_val = group.iloc[i].get('shot_statsbomb_xg', 0.1)
+                    if pd.isna(xg_val):
+                        xg_val = 0.1
+                    marker_size = max(xg_val * 300, 30)
+                    
+                    if outcome == 'Goal':
+                        ax.scatter(x, y, s=marker_size, c=GOAL_COLOR, marker='*',
+                                   edgecolors='white', linewidths=0.8, zorder=5, alpha=0.9)
+                    elif outcome == 'Saved':
+                        ax.scatter(x, y, s=marker_size, c=color, marker='o',
+                                   edgecolors='white', linewidths=0.5, zorder=4, alpha=0.7)
+                    else:
+                        ax.scatter(x, y, s=marker_size, c=color, marker='o',
+                                   edgecolors=LINE_COLOR, linewidths=0.3, zorder=3, alpha=0.4)
+            
+            ax.set_title(f'{team}\n{goals_count}球 | xG {xg_total:.2f} | {shots_total}次射门',
+                          fontsize=12, color=color, pad=10)
+            continue
+
+        # 有坐标的正常画法
+        xs = shots['x'].values
+        ys = shots['y'].values
         xgs = shots['shot_statsbomb_xg'].values if 'shot_statsbomb_xg' in shots.columns else np.ones(len(shots)) * 0.1
         outcomes = shots['shot_outcome'].values if 'shot_outcome' in shots.columns else []
 
@@ -134,7 +166,6 @@ def draw_shot_map(df, info, stats, output_path=None):
         ax.set_title(f'{team}\n{goals_count}球 | xG {xg_total:.2f} | {shots_total}次射门',
                       fontsize=12, color=color, pad=10)
 
-    # 图例
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], marker='*', color='w', markerfacecolor=GOAL_COLOR, markersize=12, label='进球', linestyle='None'),
@@ -155,6 +186,7 @@ def draw_shot_map(df, info, stats, output_path=None):
     return fig
 
 
+# ========== 传球网络图 ==========
 def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
     """传球网络图：节点=球员位置，边=传球次数
     FIFA数据模式：从info['fifa_passing_network']和info['fifa_lineups']读取
@@ -166,14 +198,13 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     fig.suptitle('传球网络图', fontsize=16, color=TEXT_COLOR, y=0.98)
 
-    # 判断是否FIFA模式
     is_fifa = info.get('source') == 'fifa'
 
     for idx, (team, color) in enumerate(zip(teams, [TEAM1_COLOR, TEAM2_COLOR])):
         ax = axes[idx]
         draw_pitch(ax)
 
-        # ===== FIFA模式：从info读传球网络和阵容数据 =====
+        # ===== FIFA模式 =====
         if is_fifa:
             pn_data = info.get('fifa_passing_network', {}).get(team, [])
             lineups = info.get('fifa_lineups', [])
@@ -183,7 +214,6 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
                 ax.set_title(f'{team}\n（传球网络数据不足）', fontsize=12, color=color, pad=10)
                 continue
 
-            # 球员位置映射（按防线分层）
             def get_line(pos_str):
                 pos = str(pos_str).lower()
                 if pos in ['gk', 'goalkeeper', '门将', '守门员']:
@@ -196,7 +226,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
                     return 'FW'
                 return 'MF'
             
-            # 找position列名
+            # 找position列
             pos_col_name = 'position'
             if team_lineups and 'position' not in team_lineups[0]:
                 for k in team_lineups[0].keys():
@@ -204,60 +234,75 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
                         pos_col_name = k
                         break
             
-            # 按防线分层布局
+            # 找player name列
+            player_col = 'player_name'
+            if team_lineups and 'player_name' not in team_lineups[0]:
+                for k in team_lineups[0].keys():
+                    if k.lower() in ['player', 'name', '球员', '姓名']:
+                        player_col = k
+                        break
+            
+            # 找传球网络中的字段名
+            from_col = 'player_from'
+            to_col = 'player_to'
+            count_col = 'passes'
+            if pn_data:
+                sample = pn_data[0]
+                if 'player_from' not in sample:
+                    for k in sample.keys():
+                        if 'from' in k.lower():
+                            from_col = k
+                        elif 'to' in k.lower():
+                            to_col = k
+                        elif 'pass' in k.lower() or 'count' in k.lower():
+                            count_col = k
+            
+            # 按防线分层
             line_x = {'GK': 8, 'DF': 28, 'MF': 60, 'FW': 92}
             line_counts = {'GK': 0, 'DF': 0, 'MF': 0, 'FW': 0}
             
-            # 先统计每条线的人数
             player_line = {}
             for p in team_lineups:
                 pos = p.get(pos_col_name, 'MF')
                 line = get_line(pos)
-                player_line[p.get('player_name', '')] = line
+                player_line[p.get(player_col, '')] = line
                 line_counts[line] += 1
             
-            # 计算每个球员的y坐标（在防线内均匀分布）
+            # 计算每个球员坐标
             player_pos = {}
             line_idx = {'GK': 0, 'DF': 0, 'MF': 0, 'FW': 0}
             for p in team_lineups:
-                name = p.get('player_name', '')
+                name = p.get(player_col, '')
                 line = player_line.get(name, 'MF')
-                cnt = line_counts[line]
-                if cnt > 0:
-                    y = 10 + (70 / max(cnt, 1)) * (line_idx[line] + 0.5)
-                else:
-                    y = 40
+                cnt = max(line_counts[line], 1)
+                y = 8 + (64 / cnt) * (line_idx[line] + 0.5)
                 x = line_x[line]
                 player_pos[name] = (x, y)
                 line_idx[line] += 1
             
-            # 传球量（每个球员总传球数）
+            # 计算总传球量（节点大小用）
             player_pass_count = {}
             for pair in pn_data:
-                p1 = pair.get('player_from', '')
-                p2 = pair.get('player_to', '')
-                cnt = int(pair.get('passes', pair.get('count', 1)))
+                p1 = pair.get(from_col, '')
+                cnt = int(pair.get(count_col, 1))
                 player_pass_count[p1] = player_pass_count.get(p1, 0) + cnt
             
-            # 画边（用曲线）
-            max_passes = max([int(p.get('passes', p.get('count', 1))) for p in pn_data]) if pn_data else 1
+            # 画边
+            max_pass_val = max([int(p.get(count_col, 1)) for p in pn_data]) if pn_data else 1
             for pair in pn_data:
-                p1 = pair.get('player_from', '')
-                p2 = pair.get('player_to', '')
-                cnt = int(pair.get('passes', pair.get('count', 1)))
+                p1 = pair.get(from_col, '')
+                p2 = pair.get(to_col, '')
+                cnt = int(pair.get(count_col, 1))
                 if cnt < min_passes:
                     continue
                 if p1 in player_pos and p2 in player_pos:
                     x1, y1 = player_pos[p1]
                     x2, y2 = player_pos[p2]
-                    lw = max(cnt / max(max_passes / 4, 0.5), 0.5)
-                    alpha = min(0.2 + cnt / max(max_passes, 1), 0.7)
-                    # 曲线连接
-                    mid_x = (x1 + x2) / 2
-                    mid_y = (y1 + y2) / 2 + (5 if y1 != y2 else 0)
+                    lw = max(cnt / max(max_pass_val / 4, 0.5), 0.5)
+                    alpha = min(0.2 + cnt / max(max_pass_val, 1), 0.7)
                     from matplotlib.patches import FancyArrowPatch
                     path = FancyArrowPatch((x1, y1), (x2, y2),
-                                           connectionstyle=f"arc3,rad=0.1",
+                                           connectionstyle="arc3,rad=0.1",
                                            color=color, lw=lw, alpha=alpha,
                                            arrowstyle="-", zorder=2)
                     ax.add_patch(path)
@@ -269,7 +314,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
                 ax.scatter(x, y, s=size, c=color, edgecolors='white',
                            linewidths=0.8, zorder=4, alpha=0.9)
                 short_name = name.split()[-1] if ' ' in str(name) else str(name)
-                short_name = short_name[:8]  # 限制长度
+                short_name = short_name[:8]
                 ax.annotate(short_name, (x, y),
                             textcoords="offset points", xytext=(0, 10),
                             fontsize=7, ha='center', color=TEXT_COLOR, alpha=0.8)
@@ -280,7 +325,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
                           fontsize=12, color=color, pad=10)
             continue
 
-        # ===== 普通StatsBomb模式：从事件流计算 =====
+        # ===== StatsBomb模式 =====
         team_passes = df[(df['team'] == team) & (df['type'] == 'Pass')].copy()
         if team_passes.empty:
             ax.set_title(f'{team}\n（无传球数据）', fontsize=12, color=color, pad=10)
@@ -339,6 +384,8 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
         return output_path
 
     return fig
+
+
 # ========== 射门对比 ==========
 def draw_shot_comparison(stats, output_path=None):
     """射门数据对比柱状图"""
@@ -360,7 +407,6 @@ def draw_shot_comparison(stats, output_path=None):
     bars1 = ax.bar(x - width/2, v1, width, label=t1, color=TEAM1_COLOR, alpha=0.85, edgecolor='none')
     bars2 = ax.bar(x + width/2, v2, width, label=t2, color=TEAM2_COLOR, alpha=0.85, edgecolor='none')
 
-    # 数值标注
     for bar in bars1:
         h = bar.get_height()
         if h > 0:
@@ -405,7 +451,6 @@ def draw_xg_flow(df, info, stats, output_path=None):
         if shots.empty:
             continue
 
-        # 时间列
         time_col = None
         for col in ['minute', 'match_minute', 'period_minute']:
             if col in shots.columns:
@@ -417,24 +462,17 @@ def draw_xg_flow(df, info, stats, output_path=None):
 
         shots = shots.sort_values(time_col)
         xg_col = 'shot_statsbomb_xg' if 'shot_statsbomb_xg' in shots.columns else None
-
         if xg_col is None:
             continue
 
         times = shots[time_col].values
         xgs = shots[xg_col].fillna(0).cumsum().values
 
-        # 分上下半场
-        half2_start = 45
-        has_half2 = any(t > half2_start for t in times) if len(times) > 0 else False
-
-        # 画线
         all_times = np.concatenate([[0], times])
         all_xgs = np.concatenate([[0], xgs])
         ax.plot(all_times, all_xgs, color=color, lw=2, label=team, alpha=0.9)
         ax.fill_between(all_times, all_xgs, alpha=0.1, color=color)
 
-        # 进球标记
         goal_shots = shots[shots['shot_outcome'] == 'Goal']
         for _, row in goal_shots.iterrows():
             ax.scatter(row[time_col], row[xg_col], s=100, c=GOAL_COLOR,
@@ -443,12 +481,7 @@ def draw_xg_flow(df, info, stats, output_path=None):
                         textcoords="offset points", xytext=(5, 8),
                         fontsize=10, color=GOAL_COLOR)
 
-    # 半场线
     ax.axvline(x=45, color=LINE_COLOR, lw=1, linestyle='--', alpha=0.6)
-    ax.text(22.5, ax.get_ylim()[1] * 0.95, '上半场', ha='center', fontsize=9, color=LINE_COLOR, alpha=0.7)
-    if has_half2:
-        ax.text(67.5, ax.get_ylim()[1] * 0.95, '下半场', ha='center', fontsize=9, color=LINE_COLOR, alpha=0.7)
-
     ax.set_xlabel('分钟')
     ax.set_ylabel('累积 xG')
     ax.set_title('xG 累积曲线', fontsize=14, pad=15)
@@ -470,7 +503,7 @@ def draw_xg_flow(df, info, stats, output_path=None):
 
 # ========== 控球时间线 ==========
 def draw_possession_timeline(df, info, stats, output_path=None, window=5):
-    """滚动控球率时间线（每5分钟窗口）"""
+    """滚动控球率时间线"""
     teams = list(stats.keys())
     if len(teams) < 2:
         return None
@@ -482,7 +515,6 @@ def draw_possession_timeline(df, info, stats, output_path=None, window=5):
             break
 
     if time_col is None or 'possession_team' not in df.columns:
-        # 没有possession_team，退化为用事件数代替
         return _draw_possession_by_events(df, info, stats, output_path, window)
 
     fig, ax = plt.subplots(figsize=(12, 5))
@@ -518,7 +550,7 @@ def draw_possession_timeline(df, info, stats, output_path=None, window=5):
 
 
 def _draw_possession_by_events(df, info, stats, output_path=None, window=5):
-    """退化为按事件数画控球趋势"""
+    """退化为按事件数画节奏趋势（FIFA模式）"""
     teams = list(stats.keys())
     if len(teams) < 2:
         return None
@@ -533,20 +565,31 @@ def _draw_possession_by_events(df, info, stats, output_path=None, window=5):
 
     fig, ax = plt.subplots(figsize=(12, 5))
 
-    max_min = int(df[time_col].max())
+    max_min_val = df[time_col].dropna()
+    if max_min_val.empty:
+        return None
+    max_min = int(max_min_val.max())
+    if max_min < 10:
+        max_min = 90
+
     bins = list(range(0, max_min + window, window))
 
     for team, color in zip(teams, [TEAM1_COLOR, TEAM2_COLOR]):
         team_df = df[df['team'] == team]
+        if team_df.empty:
+            continue
         counts, edges = np.histogram(team_df[time_col].dropna(), bins=bins)
         centers = [(edges[i] + edges[i+1]) / 2 for i in range(len(counts))]
         ax.plot(centers, counts, color=color, lw=2, label=team, alpha=0.85)
         ax.fill_between(centers, counts, alpha=0.1, color=color)
 
     ax.axvline(x=45, color=LINE_COLOR, lw=1, linestyle='--', alpha=0.6)
+    ax.text(22.5, max(ax.get_ylim()[1] * 0.95, 1), '上半场', ha='center', fontsize=9, color=LINE_COLOR, alpha=0.7)
+    if max_min > 45:
+        ax.text(67.5, max(ax.get_ylim()[1] * 0.95, 1), '下半场', ha='center', fontsize=9, color=LINE_COLOR, alpha=0.7)
     ax.set_xlabel('分钟')
-    ax.set_ylabel('事件数')
-    ax.set_title(f'比赛节奏时间线（{window}分钟窗口）', fontsize=14, pad=15)
+    ax.set_ylabel('射门事件数')
+    ax.set_title(f'比赛节奏时间线（{window}分钟窗口）\n（FIFA数据仅含射门事件，趋势仅供参考）', fontsize=14, pad=15)
     ax.legend(frameon=False, fontsize=11)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -595,7 +638,6 @@ def draw_stats_bar(stats, output_path=None):
     bars1 = ax.barh(y - height/2, v1, height, label=t1, color=TEAM1_COLOR, alpha=0.85)
     bars2 = ax.barh(y + height/2, v2, height, label=t2, color=TEAM2_COLOR, alpha=0.85)
 
-    # 数值标注
     for bar in bars1:
         w = bar.get_width()
         ax.text(w + 0.5, bar.get_y() + bar.get_height()/2., f'{w:.1f}',
@@ -649,10 +691,8 @@ def generate_all_charts(df, info, stats, output_dir='./output'):
             params = list(sig.parameters.keys())
 
             if 'stats' in params and 'df' not in params:
-                # 只需要stats的函数（如draw_shot_comparison, draw_stats_bar）
                 result = func(stats, output_path=path)
             else:
-                # 需要df+info+stats的函数
                 result = func(df, info, stats, output_path=path)
 
             if result:
@@ -665,14 +705,27 @@ def generate_all_charts(df, info, stats, output_dir='./output'):
     return chart_paths
 
 
-# ========== 热力图（bonus）==========
+# ========== 热力图 ==========
 def draw_pressure_heatmap(df, info, stats, team=None, output_path=None, bins=(12, 8)):
-    """逼抢/防守行为热力图
-    team: 指定队伍，None则画两队
-    """
+    """逼抢/防守行为热力图"""
     teams = list(stats.keys())
     if len(teams) < 2:
         return None
+
+    # FIFA模式无坐标，直接返回占位图
+    if info.get('source') == 'fifa':
+        fig, ax = plt.subplots(figsize=(10, 5))
+        draw_pitch(ax)
+        ax.text(60, 45, 'FIFA数据无防守坐标\n热力图暂不可用',
+                ha='center', va='center', fontsize=14, color=LINE_COLOR, alpha=0.7)
+        ax.set_title('防守行为热力图（FIFA数据暂不支持）', fontsize=14, color=TEXT_COLOR, pad=15)
+        plt.tight_layout()
+        if output_path:
+            fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+            plt.close(fig)
+            print(f"[可视化] 防守热力图（占位）→ {output_path}")
+            return output_path
+        return fig
 
     target_teams = [team] if team else teams
     n = len(target_teams)
@@ -700,13 +753,11 @@ def draw_pressure_heatmap(df, info, stats, team=None, output_path=None, bins=(12
             ax.set_title(f'{t}\n（无有效坐标）', fontsize=12, color=color, pad=10)
             continue
 
-        # 热力图
         heatmap, xedges, yedges = np.histogram2d(
             valid['x'], valid['y'], bins=bins,
             range=[[0, 120], [0, 80]]
         )
 
-        # 平滑
         from scipy.ndimage import gaussian_filter
         heatmap = gaussian_filter(heatmap, sigma=1)
 
