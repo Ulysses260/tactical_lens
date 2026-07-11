@@ -40,7 +40,7 @@ def _parse_attempts(s):
         return None, None
     s = str(s).strip()
     m = re.match(r'(\d+)\s*\((\d+)\)', s)
-    if m = re.match(r'(\d+)\s*\((\d+)\)', s)
+    if m := re.match(r'(\d+)\s*\((\d+)\)', s)
     if m:
         return int(m.group(1)), int(m.group(2))
     try:
