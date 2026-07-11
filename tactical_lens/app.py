@@ -1,6 +1,11 @@
 """
 app.py — 战术透镜 Streamlit 网页版
 启动：streamlit run app.py
+
+修复说明：
+- 新增图表点击放大功能（每个图表可展开查看大图）
+- 新增FIFA数据ZIP包上传支持（12个CSV打包上传）
+- 保持深色主题风格一致
 """
 import streamlit as st
 import os
@@ -16,6 +21,13 @@ from stats_engine import compute_match_stats, generate_insights
 from visualizer import generate_all_charts
 from report_engine import generate_text_report, generate_html_report, ReportTemplate
 
+# 尝试导入FIFA适配器
+try:
+    from fifa_adapter import load_fifa_from_csv, is_fifa_csv_dir
+    _HAS_FIFA = True
+except ImportError:
+    _HAS_FIFA = False
+
 
 # ========== 页面配置 ==========
 st.set_page_config(
@@ -25,6 +37,65 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ========== 深色主题CSS ==========
+st.markdown("""
+<style>
+    .main .block-container {
+        padding-top: 2rem;
+    }
+    /* 深色主题增强 */
+    .stApp {
+        background-color: #0d1117;
+    }
+    /* 数据表格深色主题 */
+    .stDataFrame {
+        background-color: #161b22;
+    }
+    /* 放大按钮样式 */
+    .zoom-expander summary {
+        color: #4da6ff;
+        font-size: 0.85rem;
+        cursor: pointer;
+    }
+    .zoom-expander summary:hover {
+        color: #00f5c4;
+    }
+    /* 标题颜色 */
+    h1, h2, h3 {
+        color: #e6edf3 !important;
+    }
+    /* 侧边栏 */
+    .css-1d391kg {
+        background-color: #161b22;
+    }
+    /* 比分展示 */
+    .score-display {
+        text-align: center;
+        padding: 20px 0;
+    }
+    .score-team1 {
+        font-size: 24px;
+        color: #00f5c4;
+        font-weight: bold;
+    }
+    .score-team2 {
+        font-size: 24px;
+        color: #4da6ff;
+        font-weight: bold;
+    }
+    .score-divider {
+        font-size: 24px;
+        color: #8b949e;
+        margin: 0 10px;
+    }
+    .score-sub {
+        color: #8b949e;
+        margin-top: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
 # ========== 侧边栏 ==========
 with st.sidebar:
     st.title("⚽ 战术透镜")
@@ -32,12 +103,29 @@ with st.sidebar:
     st.divider()
 
     st.subheader("📂 上传数据")
-    uploaded_files = st.file_uploader(
-        "上传CSV文件（FIFA数据请全选12个CSV一起上传）",
-        type=['csv'],
-        accept_multiple_files=True,
-        help="支持 StatsBomb / Catapult / FIFA比赛报告 / 自定义CSV格式"
+    
+    # 数据格式选择
+    data_format = st.radio(
+        "数据格式",
+        ["单文件CSV", "FIFA比赛报告(ZIP)"],
+        help="StatsBomb/Catapult/自定义使用单文件；FIFA使用12个CSV打包的ZIP",
+        horizontal=True,
     )
+    
+    if data_format == "单文件CSV":
+        uploaded_file = st.file_uploader(
+            "上传CSV文件",
+            type=['csv'],
+            help="支持 StatsBomb / Catapult / 自定义CSV格式"
+        )
+        fifa_zip = None
+    else:
+        uploaded_file = None
+        fifa_zip = st.file_uploader(
+            "上传FIFA CSV压缩包",
+            type=['zip'],
+            help="FIFA比赛报告导出的12个CSV文件打包为ZIP上传"
+        )
 
     match_name = st.text_input("比赛名称", value="自定义比赛")
 
@@ -68,19 +156,41 @@ tactical_lens/
 ├── visualizer.py     可视化引擎
 ├── report_engine.py  报告引擎
 └── templates/        报告模板
-    ├── default.json  完整报告
-    ├── concise.json  精简速报
-    └── coach.json    教练版
 """, language=None)
 
     st.divider()
-    st.caption("数据来源：StatsBomb Open Data / FIFA Training Centre")
+    st.caption("数据来源：StatsBomb / FIFA 比赛报告")
+
+# ========== 辅助函数：图表放大展示 ==========
+def show_chart_with_zoom(chart_path, chart_title, zoom_level=1.0):
+    """展示图表并提供点击放大功能
+    
+    参数:
+        chart_path: 图表文件路径
+        chart_title: 图表标题
+        zoom_level: 放大倍数（默认1.0即原图大小）
+    """
+    if not chart_path or not os.path.exists(chart_path):
+        st.info(f"暂无 {chart_title} 数据")
+        return
+    
+    # 缩略图展示
+    st.image(chart_path, caption=chart_title, use_container_width=True)
+    
+    # 放大查看（折叠面板）
+    with st.expander(f"🔍 点击放大查看 — {chart_title}"):
+        st.image(chart_path, caption=chart_title, use_container_width=True, clamp=False)
+        st.caption("💡 提示：右键图片可保存或在新标签页中查看原图")
+
 
 # ========== 主区域 ==========
 st.title("⚽ 战术透镜 — 比赛分析报告")
 
-if not uploaded_files:
-    st.info("👈 在左侧上传CSV数据文件开始分析")
+# 判断是否有上传
+has_data = (uploaded_file is not None) or (fifa_zip is not None)
+
+if not has_data:
+    st.info("👈 在左侧上传数据文件开始分析")
     st.markdown("""
     ---
     ### 支持的数据格式
@@ -88,58 +198,85 @@ if not uploaded_files:
     | 格式 | 说明 | 关键字段 |
     |------|------|----------|
     | **StatsBomb** | 专业赛事事件数据 | type, team, location, shot_statsbomb_xg |
-    | **FIFA比赛报告** | FIFA Training Centre PDF转换 | 12个CSV文件（01_match_info ~ 12_passing_network） |
+    | **FIFA比赛报告** | FIFA官方PDF导出数据 | 12个CSV文件（ZIP上传） |
     | **Catapult** | 体育科学追踪数据 | 距离, 高强度跑, 冲刺 |
     | **自定义CSV** | 任意比赛数据 | 至少需要 team 列 |
 
     ### 使用流程
-    1. 上传CSV → 自动识别格式（FIFA请全选12个CSV一起上传）
+    1. 选择数据格式 → 上传文件
     2. 选择模板 → 完整/精简/教练版
     3. 自动生成 → 图表 + 洞察 + 报告
+    
+    ### FIFA数据上传说明
+    FIFA比赛报告导出为12个CSV文件，将它们打包为ZIP后上传。
+    文件名需保持原样（01_match_info.csv ~ 12_passing_network.csv）。
     """)
     st.stop()
 
 # ========== 分析流程 ==========
 with st.spinner("正在分析..."):
-    # 保存上传文件到临时目录
     temp_dir = tempfile.mkdtemp()
     output_dir = os.path.join(temp_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
-
-    # 多文件：保存到目录，传目录路径（FIFA模式）
-    if len(uploaded_files) > 1:
-        csv_dir = os.path.join(temp_dir, "fifa_data")
+    
+    is_fifa_data = False
+    
+    # ---- 处理FIFA ZIP上传 ----
+    if fifa_zip is not None and _HAS_FIFA:
+        # 解压ZIP
+        zip_path = os.path.join(temp_dir, "fifa_data.zip")
+        with open(zip_path, "wb") as f:
+            f.write(fifa_zip.getbuffer())
+        
+        csv_dir = os.path.join(temp_dir, "fifa_csv")
         os.makedirs(csv_dir, exist_ok=True)
-        for f in uploaded_files:
-            file_path = os.path.join(csv_dir, f.name)
-            with open(file_path, "wb") as out:
-                out.write(f.getbuffer())
-        load_path = csv_dir
-    else:
-        # 单文件
+        
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(csv_dir)
+        
+        # 检查是否为FIFA目录（可能解压在子目录）
+        if not is_fifa_csv_dir(csv_dir):
+            # 查找子目录
+            for item in os.listdir(csv_dir):
+                sub_path = os.path.join(csv_dir, item)
+                if os.path.isdir(sub_path) and is_fifa_csv_dir(sub_path):
+                    csv_dir = sub_path
+                    break
+        
+        if is_fifa_csv_dir(csv_dir):
+            # 使用FIFA适配器加载
+            df, info, stats = load_fifa_from_csv(csv_dir, match_name)
+            is_fifa_data = True
+        else:
+            st.error("ZIP文件中未找到有效的FIFA CSV数据，请确认文件结构正确")
+            st.stop()
+    
+    # ---- 处理单文件CSV上传 ----
+    elif uploaded_file is not None:
         csv_path = os.path.join(temp_dir, "match_data.csv")
         with open(csv_path, "wb") as f:
-            f.write(uploaded_files[0].getbuffer())
-        load_path = csv_path
-
-    # 1. 加载数据
-    try:
-        df, info = auto_load(load_path, match_name=match_name)
-    except Exception as e:
-        st.error(f"数据加载失败：{e}")
-        st.stop()
-
-    # 2. 计算统计（FIFA数据有预计算的stats，直接用）
-    if '_fifa_stats' in info:
-        stats = info['_fifa_stats']
-    elif 'team' not in df.columns:
-        st.error("❌ 数据格式不匹配：未找到 team 列。\n\n"
-                 "**StatsBomb格式**：上传包含 type/team/location 的事件CSV\n"
-                 "**FIFA比赛报告**：请同时选中全部12个CSV文件一起上传\n"
-                 "**自定义格式**：确保CSV中包含 team 列")
-        st.stop()
+            f.write(uploaded_file.getbuffer())
+        
+        # 1. 加载数据
+        try:
+            result = auto_load(csv_path, match_name=match_name)
+            if len(result) == 3:
+                df, info, stats = result  # FIFA格式（已预计算stats）
+                is_fifa_data = True
+            else:
+                df, info = result
+                is_fifa_data = False
+        except Exception as e:
+            st.error(f"数据加载失败：{e}")
+            st.stop()
+        
+        # 2. 计算统计（仅非FIFA格式）
+        if not is_fifa_data:
+            stats = compute_match_stats(df, info)
+    
     else:
-        stats = compute_match_stats(df, info)
+        st.error("未识别的数据格式")
+        st.stop()
 
     # 3. 生成洞察
     insights = generate_insights(stats, df, info)
@@ -165,13 +302,19 @@ if len(teams) >= 2:
 
     # 比分
     st.markdown(f"""
-    <div style="text-align:center; padding:20px 0;">
-        <span style="font-size:24px; color:#00f5c4; font-weight:bold;">{t1} {s1['goals']}</span>
-        <span style="font-size:24px; color:#8b949e;"> — </span>
-        <span style="font-size:24px; color:#4da6ff; font-weight:bold;">{s2['goals']} {t2}</span>
-        <br><span style="color:#8b949e;">{match_name}</span>
+    <div class="score-display">
+        <span class="score-team1">{t1} {s1['goals']}</span>
+        <span class="score-divider">—</span>
+        <span class="score-team2">{s2['goals']} {t2}</span>
+        <div class="score-sub">{match_name}</div>
     </div>
     """, unsafe_allow_html=True)
+    
+    # 数据源标识
+    if is_fifa_data:
+        st.caption("📊 数据来源：FIFA比赛报告（聚合数据，部分功能为近似值）")
+    else:
+        st.caption("📊 数据来源：事件流数据（完整功能）")
 
     # 核心数据表
     st.subheader("📊 核心数据")
@@ -203,32 +346,78 @@ if len(teams) >= 2:
     })
     st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
-    # 图表展示
+    # 图表展示 — 第一排（2列，大图）
     st.subheader("📈 战术图表")
-    chart_display = [
+    st.caption("💡 每张图表下方可点击放大查看")
+    
+    chart_display_row1 = [
         ('shot_map', '射门位置图'),
         ('pass_network', '传球网络图'),
+    ]
+    row1_cols = st.columns(2)
+    for idx, (chart_id, chart_title) in enumerate(chart_display_row1):
+        chart_file = chart_paths.get(chart_id)
+        with row1_cols[idx]:
+            show_chart_with_zoom(chart_file, chart_title)
+    
+    # 图表展示 — 第二排（2列）
+    chart_display_row2 = [
         ('xg_flow', 'xG累积曲线'),
         ('pressure_heatmap', '防守热力图'),
     ]
-    chart_cols = st.columns(2)
-    for idx, (chart_id, chart_title) in enumerate(chart_display):
+    row2_cols = st.columns(2)
+    for idx, (chart_id, chart_title) in enumerate(chart_display_row2):
         chart_file = chart_paths.get(chart_id)
-        if chart_file and os.path.exists(chart_file):
-            with chart_cols[idx % 2]:
-                st.image(chart_file, caption=chart_title, use_container_width=True)
-
-    chart_display2 = [
+        with row2_cols[idx]:
+            show_chart_with_zoom(chart_file, chart_title)
+    
+    # 图表展示 — 第三排（3列，小图）
+    chart_display_row3 = [
         ('shot_comparison', '射门数据对比'),
         ('possession_timeline', '控球时间线'),
         ('stats_bar', '核心数据对比'),
     ]
-    chart_cols2 = st.columns(3)
-    for idx, (chart_id, chart_title) in enumerate(chart_display2):
+    row3_cols = st.columns(3)
+    for idx, (chart_id, chart_title) in enumerate(chart_display_row3):
         chart_file = chart_paths.get(chart_id)
-        if chart_file and os.path.exists(chart_file):
-            with chart_cols2[idx % 3]:
-                st.image(chart_file, caption=chart_title, use_container_width=True)
+        with row3_cols[idx]:
+            show_chart_with_zoom(chart_file, chart_title)
+
+    # ===== FIFA专属P0图表（仅FIFA模式展示） =====
+    if is_fifa_data:
+        st.subheader("🎯 FIFA专属战术分析")
+        st.caption("基于FIFA比赛报告深度数据的专属战术图表")
+        
+        # FIFA图表 — 第四排（1列，战术雷达大图）
+        chart_display_row4 = [
+            ('tactical_radar', '战术风格雷达图'),
+        ]
+        row4_cols = st.columns(1)
+        for idx, (chart_id, chart_title) in enumerate(chart_display_row4):
+            chart_file = chart_paths.get(chart_id)
+            with row4_cols[idx]:
+                show_chart_with_zoom(chart_file, chart_title)
+        
+        # FIFA图表 — 第五排（2列）
+        chart_display_row5 = [
+            ('line_breaks', '防线穿透分析'),
+            ('cross_tactics', '传中战术分析'),
+        ]
+        row5_cols = st.columns(2)
+        for idx, (chart_id, chart_title) in enumerate(chart_display_row5):
+            chart_file = chart_paths.get(chart_id)
+            with row5_cols[idx]:
+                show_chart_with_zoom(chart_file, chart_title)
+        
+        # FIFA图表 — 第六排（1列，体能大图）
+        chart_display_row6 = [
+            ('physical_zones', '体能五分区图'),
+        ]
+        row6_cols = st.columns(1)
+        for idx, (chart_id, chart_title) in enumerate(chart_display_row6):
+            chart_file = chart_paths.get(chart_id)
+            with row6_cols[idx]:
+                show_chart_with_zoom(chart_file, chart_title)
 
     # 战术洞察
     st.subheader("🔍 战术洞察")
@@ -240,14 +429,30 @@ if len(teams) >= 2:
 
     # 球员排行
     st.subheader("👥 球员数据")
-    for team in teams:
+    player_cols = st.columns(2)
+    for i, team in enumerate(teams):
         s = stats[team]
-        with st.expander(f"{team} 传球TOP5"):
-            if not s['pass_leaders'].empty:
-                for player, cnt in s['pass_leaders'].items():
-                    st.markdown(f"- **{player}**: {cnt}次成功传球")
-            else:
-                st.info("无数据")
+        with player_cols[i]:
+            with st.expander(f"🏃 {team} 传球TOP5"):
+                if not s['pass_leaders'].empty:
+                    for player, cnt in s['pass_leaders'].items():
+                        st.markdown(f"- **{player}**: {cnt}次成功传球")
+                else:
+                    st.info("无数据")
+            
+            with st.expander(f"⚽ {team} 射门TOP3"):
+                if not s['shot_leaders'].empty:
+                    for player, cnt in s['shot_leaders'].items():
+                        st.markdown(f"- **{player}**: {cnt}次射门")
+                else:
+                    st.info("无数据")
+            
+            with st.expander(f"📊 {team} xG TOP3"):
+                if not s['xg_leaders'].empty:
+                    for player, xg_val in s['xg_leaders'].items():
+                        st.markdown(f"- **{player}**: {xg_val:.2f} xG")
+                else:
+                    st.info("无数据")
 
     # 下载区
     st.subheader("📥 下载报告")
