@@ -1309,6 +1309,426 @@ def load_fifa_from_csv(csv_dir, match_name=None):
     return df, info, stats
 
 
+# ========== 战术洞察生成 ==========
+
+def generate_tactical_insights(stats, info=None):
+    """从FIFA数据生成丰富的战术洞察，分进攻端和防守端
+    
+    覆盖维度：控球风格、进攻威胁、防守强度、防线漏洞、关键球员、
+              体能对比、传中策略、防线穿透、定位球威胁、比赛节奏
+    
+    参数:
+        stats: 球队统计字典 {team_name: {stat_name: value}}
+        info: 比赛信息字典（可选，含fifa_extra高级数据）
+    
+    返回:
+        dict: {'attack': [...], 'defense': [...]}
+              每条洞察格式: {'category': str, 'text': str, 'priority': 1-3, 'suggestion': str}
+    """
+    teams = list(stats.keys())
+    if len(teams) < 2:
+        return {
+            'attack': [{'category': '通用', 'text': '数据不足，无法生成对比洞察', 'priority': 3, 'suggestion': ''}],
+            'defense': []
+        }
+    
+    t1, t2 = teams[0], teams[1]
+    s1, s2 = stats[t1], stats[t2]
+    
+    # 获取FIFA扩展数据（如果有）
+    fifa_extra = info.get('fifa_extra', {}) if info else {}
+    radar_data = fifa_extra.get('tactical_radar', {})
+    lb_data = fifa_extra.get('line_breaks', {})
+    cross_data = fifa_extra.get('cross_tactics', {})
+    phys_data = fifa_extra.get('physical_zones', {})
+    
+    attack_insights = []
+    defense_insights = []
+    
+    # ===== 1. 控球风格判断 =====
+    p1 = s1.get('possession_pct', 50)
+    p2 = s2.get('possession_pct', 50)
+    pass_acc1 = s1.get('pass_accuracy', 0)
+    pass_acc2 = s2.get('pass_accuracy', 0)
+    
+    if abs(p1 - p2) > 10:
+        dominant = t1 if p1 > p2 else t2
+        reactive = t2 if p1 > p2 else t1
+        dom_pct = max(p1, p2)
+        react_pct = min(p1, p2)
+        dom_acc = pass_acc1 if p1 > p2 else pass_acc2
+        
+        if dom_acc > 85:
+            style = "传控主导型"
+        elif dom_acc > 75:
+            style = "控球推进型"
+        else:
+            style = "控球但效率一般型"
+            
+        attack_insights.append({
+            'category': '控球风格',
+            'text': f"{dominant}以{dom_pct:.0f}%控球率占据场上主动，传球成功率{dom_acc:.0f}%，呈现{style}的进攻打法；{reactive}控球率仅{react_pct:.0f}%，更偏向防守反击战术。",
+            'priority': 1 if abs(p1 - p2) > 20 else 2,
+            'suggestion': f"{reactive}应注重反击时的出球速度与精准度，利用对手压上后的身后空间"
+        })
+    else:
+        attack_insights.append({
+            'category': '控球风格',
+            'text': f"双方控球率接近（{p1:.0f}% vs {p2:.0f}%），比赛呈现均势对抗，中场争夺激烈。",
+            'priority': 3,
+            'suggestion': '控球相当的情况下，定位球和反击质量可能成为胜负关键'
+        })
+    
+    # ===== 2. 进攻威胁来源 =====
+    for team in teams:
+        s = stats[team]
+        xg = s.get('xg', 0)
+        shots = s.get('shots_total', 0)
+        sot = s.get('shots_on_target', 0)
+        key_passes = s.get('key_passes', 0)
+        
+        if shots == 0:
+            continue
+        
+        sot_rate = sot / shots * 100
+        xg_per_shot = xg / max(shots, 1)
+        
+        # 判断进攻威胁类型
+        if xg_per_shot > 0.15 and sot_rate > 40:
+            threat_type = "高质量机会型"
+            desc = f"场均每脚射门xG达{xg_per_shot:.2f}，射正率{sot_rate:.0f}%，进攻效率高，创造的机会质量好"
+        elif shots > 15 and sot_rate < 30:
+            threat_type = "数量压迫型"
+            desc = f"全场{shots}脚射门但射正率仅{sot_rate:.0f}%，靠进攻次数压制，但射门选择有待优化"
+        elif key_passes > 10:
+            threat_type = "传切配合型"
+            desc = f"关键传球{key_passes}次，善于通过配合创造机会，中场创造力较强"
+        else:
+            threat_type = "均衡型"
+            desc = f"{shots}次射门、{key_passes}次关键传球，进攻手段相对均衡"
+        
+        attack_insights.append({
+            'category': '进攻威胁',
+            'text': f"{team}的进攻呈{threat_type}特征：{desc}，总xG为{xg:.2f}。",
+            'priority': 2,
+            'suggestion': ''
+        })
+    
+    # ===== 3. 防线穿透能力 =====
+    if lb_data and t1 in lb_data and t2 in lb_data:
+        lb1 = lb_data[t1]
+        lb2 = lb_data[t2]
+        
+        better = t1 if lb1['success_rate'] > lb2['success_rate'] else t2
+        worse = t2 if lb1['success_rate'] > lb2['success_rate'] else t1
+        better_lb = lb1 if lb1['success_rate'] > lb2['success_rate'] else lb2
+        worse_lb = lb2 if lb1['success_rate'] > lb2['success_rate'] else lb1
+        
+        attack_insights.append({
+            'category': '防线穿透',
+            'text': f"{better}防线穿透力更强：{better_lb['attempts']}次尝试突破防线，成功{better_lb['completed']}次，成功率{better_lb['success_rate']:.1f}%，转化{better_lb['goals']}粒进球；{worse}仅{worse_lb['completed']}次成功穿透（成功率{worse_lb['success_rate']:.1f}%）。",
+            'priority': 2 if abs(lb1['success_rate'] - lb2['success_rate']) > 10 else 3,
+            'suggestion': f"{worse}中场需加强拦截，切断对手穿透传球的路线"
+        })
+        
+        # 突破关键球员
+        better_top = better_lb.get('top_players', [])
+        if better_top:
+            player_names = '、'.join([p['name'].split()[-1] if ' ' in str(p['name']) else str(p['name']) 
+                                     for p in better_top[:2]])
+            attack_insights.append({
+                'category': '关键球员',
+                'text': f"{better}的{player_names}是防线突破的核心人物，多次成功穿透对方防线。",
+                'priority': 2,
+                'suggestion': f"对手应对这些球员进行重点盯防和战术限制"
+            })
+    
+    # ===== 4. 传中策略 =====
+    if cross_data and t1 in cross_data and t2 in cross_data:
+        c1 = cross_data[t1]
+        c2 = cross_data[t2]
+        
+        # 分析传中偏好
+        for team, cd in [(t1, c1), (t2, c2)]:
+            type_dist = cd.get('type_distribution', {})
+            total = cd.get('total_attempted', 0)
+            if total == 0:
+                continue
+            
+            # 找出最主要的传中类型
+            main_type = max(type_dist.items(), key=lambda x: x[1]) if type_dist else ('unknown', 0)
+            type_names_cn = cd.get('type_names_cn', {})
+            main_type_cn = type_names_cn.get(main_type[0], main_type[0])
+            main_pct = main_type[1] / total * 100 if total > 0 else 0
+            
+            attack_insights.append({
+                'category': '传中策略',
+                'text': f"{team}全场{total}次传中，成功{cd['total_completed']}次（成功率{cd['success_rate']:.1f}%），以{main_type_cn}传中为主（占比{main_pct:.0f}%）。",
+                'priority': 3,
+                'suggestion': ''
+            })
+        
+        # 对比
+        if c1['success_rate'] != c2['success_rate']:
+            better_team = t1 if c1['success_rate'] > c2['success_rate'] else t2
+            better_rate = max(c1['success_rate'], c2['success_rate'])
+            worse_team = t2 if c1['success_rate'] > c2['success_rate'] else t1
+            worse_rate = min(c1['success_rate'], c2['success_rate'])
+            
+            if abs(better_rate - worse_rate) > 10:
+                attack_insights.append({
+                    'category': '传中效率',
+                    'text': f"{better_team}传中效率明显更高（成功率{better_rate:.1f}% vs {worse_rate:.1f}%），边路进攻质量优于{worse_team}。",
+                    'priority': 2,
+                    'suggestion': f"{worse_team}应提升传中质量或增加中路配合比重"
+                })
+    
+    # ===== 5. 定位球威胁 =====
+    for team in teams:
+        s = stats[team]
+        corners = s.get('corners', 0)
+        fouls_won = s.get('fouls_won', 0)
+        xg = s.get('xg', 0)
+        goals = s.get('goals', 0)
+        
+        if corners > 5:
+            attack_insights.append({
+                'category': '定位球',
+                'text': f"{team}获得{corners}个角球，定位球进攻资源丰富，是重要的得分手段。",
+                'priority': 2 if corners > 8 else 3,
+                'suggestion': '角球数多说明对手防线承受持续压力，可进一步丰富角球战术'
+            })
+    
+    # ===== 6. 比赛节奏 =====
+    prog1 = s1.get('deep_progressions', 0)
+    prog2 = s2.get('deep_progressions', 0)
+    total_events1 = s1.get('total_events', 0)
+    total_events2 = s2.get('total_events', 0)
+    
+    # 用推进次数估算节奏
+    avg_prog = (prog1 + prog2) / 2
+    if avg_prog > 80:
+        tempo_desc = "快节奏对攻战"
+    elif avg_prog > 50:
+        tempo_desc = "中等节奏"
+    else:
+        tempo_desc = "慢节奏控球战"
+    
+    attack_insights.append({
+        'category': '比赛节奏',
+        'text': f"全场比赛呈{tempo_desc}特征：{t1}推进{prog1}次，{t2}推进{prog2}次，双方合计{prog1+prog2}次向前推进。",
+        'priority': 2,
+        'suggestion': ''
+    })
+    
+    # ===== 7. 进攻效率（xG vs 实际进球） =====
+    for team in teams:
+        s = stats[team]
+        xg = s.get('xg', 0)
+        goals = s.get('goals', 0)
+        diff = goals - xg
+        
+        if abs(diff) >= 0.5:
+            if diff > 0:
+                attack_insights.append({
+                    'category': '进攻效率',
+                    'text': f"{team}把握机会能力出色：预期进球{xg:.2f}，实际打进{goals}球，超额完成{diff:.2f}球，射手效率高于预期。",
+                    'priority': 1 if diff > 1 else 2,
+                    'suggestion': '高效终结是宝贵优势，但需注意机会创造的可持续性'
+                })
+            else:
+                attack_insights.append({
+                    'category': '进攻效率',
+                    'text': f"{team}进攻效率偏低：预期进球{xg:.2f}但仅打进{goals}球，浪费了{abs(diff):.2f}球的机会，临门一脚有待提升。",
+                    'priority': 1 if abs(diff) > 1 else 2,
+                    'suggestion': '建议分析射门选择和得分手状态，提升终结质量'
+                })
+    
+    # ===== 8. 防守强度 =====
+    for team in teams:
+        s = stats[team]
+        fouls = s.get('fouls', 0)
+        forced = s.get('forced_turnovers', 0)
+        
+        # 从雷达数据获取防守风格
+        radar_team = radar_data.get(team, {})
+        def_dims = radar_team.get('defense', {})
+        
+        high_press = def_dims.get('高位压迫', 0) + def_dims.get('高位防线', 0)
+        low_block = def_dims.get('低位防线', 0)
+        
+        if def_dims:
+            if high_press > low_block:
+                def_style = "高位逼抢型"
+                desc = f"高位压迫+高位防线占比约{high_press:.0f}%，防线前提，主动出击夺回球权"
+            else:
+                def_style = "低位防守型"
+                desc = f"低位防线占比约{low_block:.0f}%，收缩防守，注重禁区保护"
+            
+            defense_insights.append({
+                'category': '防守风格',
+                'text': f"{team}呈{def_style}防守特征：{desc}，全场犯规{fouls}次。",
+                'priority': 2,
+                'suggestion': ''
+            })
+        else:
+            if fouls > 15:
+                def_style = "高强度对抗型"
+            elif fouls > 10:
+                def_style = "中等强度型"
+            else:
+                def_style = "技术防守型"
+            
+            defense_insights.append({
+                'category': '防守强度',
+                'text': f"{team}防守呈{def_style}特征：全场犯规{fouls}次，防守对抗强度{'较高' if fouls > 12 else '适中'}。",
+                'priority': 3,
+                'suggestion': ''
+            })
+    
+    # ===== 9. 防线漏洞 =====
+    for team in teams:
+        s = stats[team]
+        xg_conceded = stats[t2 if team == t1 else t1].get('xg', 0)  # 对手的xG即本方被射门质量
+        shots_against = stats[t2 if team == t1 else t1].get('shots_total', 0)
+        sot_against = stats[t2 if team == t1 else t1].get('shots_on_target', 0)
+        
+        opponent = t2 if team == t1 else t1
+        
+        # 从防线穿透数据看漏洞
+        opp_lb = lb_data.get(opponent, {})
+        if opp_lb and opp_lb.get('completed', 0) > 5:
+            defense_insights.append({
+                'category': '防线漏洞',
+                'text': f"{team}防线中路存在被穿透风险：对手成功突破防线{opp_lb['completed']}次，其中{opp_lb.get('goals', 0)}次转化为进球，穿透成功率{opp_lb.get('success_rate', 0):.1f}%。",
+                'priority': 2 if opp_lb.get('success_rate', 0) > 30 else 3,
+                'suggestion': '建议加强中场中路拦截，或调整后腰位置保护防线身前空间'
+            })
+        
+        # 从传中数据看边路漏洞
+        opp_cross = cross_data.get(opponent, {})
+        if opp_cross and opp_cross.get('success_rate', 0) > 25:
+            defense_insights.append({
+                'category': '防线漏洞',
+                'text': f"{team}边路防守存在隐患：对手传中成功率达{opp_cross['success_rate']:.1f}%（{opp_cross['total_completed']}/{opp_cross['total_attempted']}），边路防守压力较大。",
+                'priority': 2 if opp_cross['success_rate'] > 35 else 3,
+                'suggestion': '边后卫与边前卫需加强协同防守，减少对手高质量传中'
+            })
+    
+    # ===== 10. 体能对比 =====
+    if phys_data and t1 in phys_data and t2 in phys_data:
+        ph1 = phys_data[t1]
+        ph2 = phys_data[t2]
+        
+        dist1 = ph1.get('total_distance', 0) / 1000
+        dist2 = ph2.get('total_distance', 0) / 1000
+        sprint1 = ph1.get('sprints_count', 0)
+        sprint2 = ph2.get('sprints_count', 0)
+        hsr1 = ph1.get('high_speed_runs', 0)
+        hsr2 = ph2.get('high_speed_runs', 0)
+        
+        avg_dist = (dist1 + dist2) / 2
+        
+        if abs(dist1 - dist2) > 5:
+            fitter = t1 if dist1 > dist2 else t2
+            less_fit = t2 if dist1 > dist2 else t1
+            more_dist = max(dist1, dist2)
+            less_dist = min(dist1, dist2)
+            
+            defense_insights.append({
+                'category': '体能对比',
+                'text': f"两队体能差距明显：{fitter}全队跑动{more_dist:.1f}km，比{less_fit}的{less_dist:.1f}km多出{more_dist-less_dist:.1f}km，体能储备更充足。",
+                'priority': 2,
+                'suggestion': f"{less_fit}在比赛后半段需注意体能分配，避免因体能下降导致防守失误"
+            })
+        else:
+            defense_insights.append({
+                'category': '体能对比',
+                'text': f"两队体能相当：{t1}跑动{dist1:.1f}km，{t2}跑动{dist2:.1f}km，均处于{avg_dist:.0f}km左右的正常水平。",
+                'priority': 3,
+                'suggestion': ''
+            })
+        
+        # 冲刺次数对比（反映爆发力和防守覆盖）
+        if abs(sprint1 - sprint2) > 20:
+            more_sprint = t1 if sprint1 > sprint2 else t2
+            more_s = max(sprint1, sprint2)
+            less_s = min(sprint1, sprint2)
+            
+            attack_insights.append({
+                'category': '体能对比',
+                'text': f"{more_sprint}冲刺次数更多（{more_s}次 vs {less_s}次），速度优势明显，反击和边路突破更具威胁。",
+                'priority': 2,
+                'suggestion': ''
+            })
+        
+        # 最高速度球员
+        top1 = ph1.get('top_speed_players', [])
+        top2 = ph2.get('top_speed_players', [])
+        if top1 and top2:
+            fastest1 = top1[0]
+            fastest2 = top2[0]
+            n1 = fastest1['name'].split()[-1] if ' ' in str(fastest1['name']) else str(fastest1['name'])
+            n2 = fastest2['name'].split()[-1] if ' ' in str(fastest2['name']) else str(fastest2['name'])
+            
+            defense_insights.append({
+                'category': '关键球员',
+                'text': f"速度尖兵：{t1}的{n1}最高速度{fastest1['top_speed']:.1f}km/h，{t2}的{n2}最高速度{fastest2['top_speed']:.1f}km/h，是各自球队反击中的重要武器。",
+                'priority': 3,
+                'suggestion': ''
+            })
+    
+    # ===== 11. 射门关键球员 =====
+    for team in teams:
+        s = stats[team]
+        shot_leaders = s.get('shot_leaders', pd.Series(dtype=int))
+        xg_leaders = s.get('xg_leaders', pd.Series(dtype=float))
+        
+        if not shot_leaders.empty:
+            top_scorer = shot_leaders.index[0]
+            top_shots = shot_leaders.iloc[0]
+            short_name = top_scorer.split()[-1] if ' ' in str(top_scorer) else str(top_scorer)
+            
+            attack_insights.append({
+                'category': '关键球员',
+                'text': f"{team}进攻核心：{short_name}完成{top_shots}次射门，是球队最主要的进攻终结点。",
+                'priority': 2,
+                'suggestion': '对手应对其进行重点防守和针对性布防'
+            })
+    
+    # ===== 12. 传球组织核心 =====
+    for team in teams:
+        s = stats[team]
+        pass_leaders = s.get('pass_leaders', pd.Series(dtype=int))
+        
+        if not pass_leaders.empty:
+            top_passer = pass_leaders.index[0]
+            top_passes = pass_leaders.iloc[0]
+            short_name = top_passer.split()[-1] if ' ' in str(top_passer) else str(top_passer)
+            
+            defense_insights.append({
+                'category': '关键球员',
+                'text': f"{team}组织核心：{short_name}完成{top_passes}次成功传球，是球队中场节拍器和进攻发起点。",
+                'priority': 2,
+                'suggestion': f"限制{short_name}的传球空间可有效干扰{team}的进攻组织"
+            })
+    
+    # 按优先级排序
+    attack_insights.sort(key=lambda x: x['priority'])
+    defense_insights.sort(key=lambda x: x['priority'])
+    
+    # 控制数量：各保留5-7条
+    if len(attack_insights) > 7:
+        attack_insights = attack_insights[:7]
+    if len(defense_insights) > 7:
+        defense_insights = defense_insights[:7]
+    
+    return {
+        'attack': attack_insights,
+        'defense': defense_insights
+    }
+
+
 # ========== 便捷函数 ==========
 
 def is_fifa_csv_dir(csv_dir):
