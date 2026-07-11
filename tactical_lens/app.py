@@ -25,7 +25,7 @@ from report_engine import generate_text_report, generate_html_report, ReportTemp
 
 # 尝试导入FIFA适配器
 try:
-    from fifa_adapter import load_fifa_from_csv, is_fifa_csv_dir
+    from fifa_adapter import load_fifa_from_csv, is_fifa_csv_dir, generate_tactical_insights
     _HAS_FIFA = True
 except ImportError:
     _HAS_FIFA = False
@@ -374,7 +374,18 @@ with st.spinner("正在分析..."):
         st.stop()
 
     # 3. 生成洞察
-    insights = generate_insights(stats, df, info)
+    if is_fifa_data and _HAS_FIFA:
+        # FIFA模式：使用更丰富的FIFA专属战术洞察
+        tactical_insights = generate_tactical_insights(stats, info)
+        attack_insights = tactical_insights.get('attack', [])
+        defense_insights = tactical_insights.get('defense', [])
+        # 合并为扁平列表供报告引擎使用
+        insights = attack_insights + defense_insights
+    else:
+        # 通用模式：使用标准洞察生成
+        insights = generate_insights(stats, df, info)
+        attack_insights = []
+        defense_insights = []
 
     # 4. 生成图表
     chart_paths = generate_all_charts(df, info, stats, output_dir=output_dir)
@@ -523,11 +534,33 @@ if len(teams) >= 2:
 
     # 战术洞察
     st.subheader("🔍 战术洞察")
-    for ins in insights:
-        priority_icon = {"1": "🔴", "2": "🟡", "3": "⚪"}.get(str(ins['priority']), "·")
-        st.markdown(f"**{priority_icon} [{ins['category']}]** {ins['text']}")
-        if ins.get('suggestion'):
-            st.caption(f"→ {ins['suggestion']}")
+    
+    if is_fifa_data and attack_insights and defense_insights:
+        # FIFA模式：分进攻端和防守端展示
+        ins_cols = st.columns(2)
+        
+        with ins_cols[0]:
+            st.markdown("#### ⚔ 进攻端洞察")
+            for ins in attack_insights:
+                priority_icon = {"1": "🔴", "2": "🟡", "3": "⚪"}.get(str(ins['priority']), "·")
+                st.markdown(f"**{priority_icon} [{ins['category']}]** {ins['text']}")
+                if ins.get('suggestion'):
+                    st.caption(f"→ {ins['suggestion']}")
+        
+        with ins_cols[1]:
+            st.markdown("#### 🛡 防守端洞察")
+            for ins in defense_insights:
+                priority_icon = {"1": "🔴", "2": "🟡", "3": "⚪"}.get(str(ins['priority']), "·")
+                st.markdown(f"**{priority_icon} [{ins['category']}]** {ins['text']}")
+                if ins.get('suggestion'):
+                    st.caption(f"→ {ins['suggestion']}")
+    else:
+        # 通用模式：统一列表展示
+        for ins in insights:
+            priority_icon = {"1": "🔴", "2": "🟡", "3": "⚪"}.get(str(ins['priority']), "·")
+            st.markdown(f"**{priority_icon} [{ins['category']}]** {ins['text']}")
+            if ins.get('suggestion'):
+                st.caption(f"→ {ins['suggestion']}")
 
     # 球员排行
     st.subheader("👥 球员数据")
