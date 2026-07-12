@@ -1706,3 +1706,97 @@ def generate_all_charts(df, info, stats, output_dir='./output'):
 
     print(f"\n[可视化] 完成：{len([v for v in chart_paths.values() if v])}/{len(chart_configs)} 张图 → {output_dir}/")
     return chart_paths
+
+
+# ========== 高清图表保存辅助函数（供PDF报告使用） ==========
+
+def save_chart_high_res(fig, output_path, dpi=300):
+    """将matplotlib图表保存为高分辨率图片，供PDF报告嵌入
+    
+    参数:
+        fig: matplotlib Figure 对象
+        output_path: 保存路径
+        dpi: 分辨率，默认300dpi（打印级质量）
+    
+    返回:
+        str: 保存后的文件路径，失败返回None
+    """
+    if fig is None:
+        return None
+    try:
+        fig.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor=BG_COLOR)
+        plt.close(fig)
+        print(f"[可视化] 高清图表已保存 → {output_path} ({dpi}dpi)")
+        return output_path
+    except Exception as e:
+        print(f"[可视化] 高清图表保存失败 {output_path}: {e}")
+        try:
+            plt.close(fig)
+        except Exception:
+            pass
+        return None
+
+
+def generate_charts_for_pdf(df, info, stats, output_dir='./pdf_charts', dpi=300):
+    """生成PDF报告所需的所有图表（高分辨率），返回 {chart_id: filepath}
+    
+    与 generate_all_charts 类似，但使用更高DPI，且只返回成功生成的图表。
+    供 report_generator.py 调用。
+    
+    参数:
+        df: 事件数据DataFrame
+        info: 比赛信息字典
+        stats: 球队统计字典
+        output_dir: 输出目录
+        dpi: 分辨率
+    
+    返回:
+        dict: {chart_id: 图片文件路径}，只包含成功生成的图表
+    """
+    _ensure_font_setup()
+    os.makedirs(output_dir, exist_ok=True)
+    
+    chart_paths = {}
+    
+    chart_configs = [
+        ('shot_map', draw_shot_map, '射门位置图'),
+        ('pass_network', draw_pass_network, '传球网络图'),
+        ('shot_comparison', draw_shot_comparison, '射门对比'),
+        ('xg_flow', draw_xg_flow, 'xG累积曲线'),
+        ('possession_timeline', draw_possession_timeline, '控球时间线'),
+        ('stats_bar', draw_stats_bar, '核心数据对比'),
+        ('pressure_heatmap', draw_pressure_heatmap, '防守热力图'),
+        # FIFA专属图表
+        ('tactical_radar', draw_tactical_radar, '战术风格雷达图'),
+        ('line_breaks', draw_line_breaks, '防线穿透分析'),
+        ('cross_tactics', draw_cross_tactics, '传中战术分析'),
+        ('physical_zones', draw_physical_zones, '体能五分区图'),
+    ]
+    
+    for chart_id, func, name in chart_configs:
+        path = os.path.join(output_dir, f'{chart_id}.png')
+        try:
+            import inspect
+            sig = inspect.signature(func)
+            params = list(sig.parameters.keys())
+            
+            # 先获取fig对象（不传入output_path）
+            if 'stats' in params and 'df' not in params:
+                fig = func(stats)
+            else:
+                fig = func(df, info, stats)
+            
+            # 用高DPI保存
+            if fig is not None:
+                saved = save_chart_high_res(fig, path, dpi=dpi)
+                if saved:
+                    chart_paths[chart_id] = saved
+            else:
+                print(f"[可视化] {name} 返回None，跳过")
+        except Exception as e:
+            print(f"[可视化] {name}生成失败：{e}")
+            import traceback
+            traceback.print_exc()
+    
+    print(f"\n[可视化] PDF图表完成：{len(chart_paths)}/{len(chart_configs)} 张 → {output_dir}/")
+    return chart_paths
