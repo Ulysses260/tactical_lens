@@ -25,22 +25,27 @@ from report_engine import generate_text_report, generate_html_report, ReportTemp
 
 # 尝试导入FIFA适配器
 try:
-    from fifa_adapter import load_fifa_from_csv, is_fifa_csv_dir, generate_tactical_insights
+    from fifa_adapter import load_fifa_from_csv, is_fifa_csv_dir, generate_tactical_insights, detect_fifa_from_filenames
     _HAS_FIFA = True
-except ImportError:
+    _FIFA_IMPORT_ERROR = None
+except ImportError as e:
     _HAS_FIFA = False
+    _FIFA_IMPORT_ERROR = str(e)
 
 # 尝试导入FIFA PDF解析器
 try:
     from fifa_pdf_parser import parse_fifa_pdf
     _HAS_FIFA_PDF = True
-except ImportError:
-    _HAS_FIFA_PDF = False
     _FIFA_PDF_IMPORT_ERROR = None
+except ImportError as e:
+    _HAS_FIFA_PDF = False
+    _FIFA_PDF_IMPORT_ERROR = str(e)
+    # 进一步检测是pdfplumber缺失还是其他问题
     try:
         import pdfplumber  # noqa: F401
-    except ImportError as e:
-        _FIFA_PDF_IMPORT_ERROR = f"缺少pdfplumber依赖: {e}"
+        _PDFPLUMBER_AVAILABLE = True
+    except ImportError:
+        _PDFPLUMBER_AVAILABLE = False
 
 
 # ========== 页面配置 ==========
@@ -247,7 +252,20 @@ with st.spinner("正在分析..."):
     if len(pdf_files) > 0:
         detected_format = "fifa_pdf"
         if not _HAS_FIFA_PDF or not _HAS_FIFA:
-            st.error(f"❌ PDF解析不可用：{_FIFA_PDF_IMPORT_ERROR if not _HAS_FIFA_PDF else 'FIFA适配器未加载'}")
+            error_msgs = []
+            if not _HAS_FIFA:
+                error_msgs.append(f"FIFA数据适配器加载失败：{_FIFA_IMPORT_ERROR}")
+            if not _HAS_FIFA_PDF:
+                if not _PDFPLUMBER_AVAILABLE:
+                    error_msgs.append(
+                        "**缺少PDF解析依赖：pdfplumber**\n\n"
+                        "请在终端运行以下命令安装：\n\n"
+                        "```\npip install pdfplumber\n```\n\n"
+                        "安装完成后刷新页面即可使用PDF解析功能。"
+                    )
+                else:
+                    error_msgs.append(f"PDF解析器加载失败：{_FIFA_PDF_IMPORT_ERROR}")
+            st.error("❌ **PDF解析功能不可用**\n\n" + "\n\n---\n\n".join(error_msgs))
             st.stop()
         
         # 保存第一个PDF（只处理一个）
@@ -310,16 +328,19 @@ with st.spinner("正在分析..."):
                 st.error("ZIP中未找到CSV文件")
                 st.stop()
             csv_path = os.path.join(extract_dir, csv_list[0])
-            result = auto_load(csv_path, match_name=match_name)
-            if len(result) == 3:
-                df, info, stats = result
-                is_fifa_data = True
-            else:
-                df, info = result
+            try:
+                df, info = auto_load(csv_path, match_name=match_name)
                 stats = compute_match_stats(df, info)
+            except Exception as e:
+                st.error(f"数据加载失败：{e}")
+                st.stop()
     
     # ---- 情况3：多个CSV文件 → 先判断是不是FIFA一套 ----
     elif len(csv_files) > 1:
+        # 先用文件名快速判断是否为FIFA格式（无需保存文件即可判断）
+        csv_filenames = [f.name for f in csv_files]
+        is_fifa_multi = _HAS_FIFA and detect_fifa_from_filenames(csv_filenames)
+        
         # 保存到临时目录
         csv_dir = os.path.join(temp_dir, "fifa_csv")
         os.makedirs(csv_dir, exist_ok=True)
@@ -328,26 +349,26 @@ with st.spinner("正在分析..."):
             with open(file_path, "wb") as wf:
                 wf.write(f.getbuffer())
         
-        # 判断是否为FIFA格式
-        if _HAS_FIFA and is_fifa_csv_dir(csv_dir):
+        if is_fifa_multi:
             detected_format = "fifa_multi"
             try:
                 df, info, stats = load_fifa_from_csv(csv_dir, match_name)
                 is_fifa_data = True
             except Exception as e:
-                st.error(f"数据加载失败：{e}")
+                st.error(f"FIFA数据加载失败：{e}")
                 st.stop()
         else:
-            # 不是FIFA多文件，取第一个CSV处理
+            # 不是FIFA多文件，取第一个CSV按单文件处理
+            # （多文件非FIFA场景：如多个比赛的事件流CSV，只处理第一个）
             detected_format = "csv_multi_first"
             first_csv = os.path.join(csv_dir, csv_files[0].name)
-            result = auto_load(first_csv, match_name=match_name)
-            if len(result) == 3:
-                df, info, stats = result
-                is_fifa_data = True
-            else:
+            try:
+                result = auto_load(first_csv, match_name=match_name)
                 df, info = result
                 stats = compute_match_stats(df, info)
+            except Exception as e:
+                st.error(f"数据加载失败：{e}")
+                st.stop()
     
     # ---- 情况4：单个CSV文件 → 自动识别 ----
     elif len(csv_files) == 1:
@@ -357,14 +378,8 @@ with st.spinner("正在分析..."):
             f.write(csv_files[0].getbuffer())
         
         try:
-            result = auto_load(csv_path, match_name=match_name)
-            if len(result) == 3:
-                df, info, stats = result
-                is_fifa_data = True
-                detected_format = "fifa_single"
-            else:
-                df, info = result
-                stats = compute_match_stats(df, info)
+            df, info = auto_load(csv_path, match_name=match_name)
+            stats = compute_match_stats(df, info)
         except Exception as e:
             st.error(f"数据加载失败：{e}")
             st.stop()
