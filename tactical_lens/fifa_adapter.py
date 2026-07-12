@@ -701,6 +701,10 @@ def _extract_cross_tactics_data(crosses_df, pos_dist_df, teams):
         }
     }
     """
+    # 两个数据源都为空时返回空字典
+    if crosses_df.empty and pos_dist_df.empty:
+        return {}
+    
     result = {}
     
     type_names_cn = {
@@ -932,12 +936,17 @@ def load_fifa_from_csv(csv_dir, match_name=None):
     
     示例：
         df, info, stats = load_fifa_from_csv('/path/to/csv_output/', '加拿大vs摩洛哥')
+    
+    缺文件降级规则：
+        - 核心文件（match_info, lineups, key_stats, attempts_at_goal）缺失 → 抛出ValueError
+        - 非核心文件缺失 → 跳过对应图表，不崩溃
     """
+    # ---- 步骤0：目录存在性检查 ----
+    if not os.path.isdir(csv_dir):
+        raise ValueError(f"CSV目录不存在: {csv_dir}")
+    
     # ---- 步骤1：读取所有CSV文件（关键词匹配，兼容有无编号前缀） ----
-    # 先扫描目录中的所有CSV文件
-    all_csvs = []
-    if os.path.isdir(csv_dir):
-        all_csvs = [f for f in os.listdir(csv_dir) if f.lower().endswith('.csv')]
+    all_csvs = [f for f in os.listdir(csv_dir) if f.lower().endswith('.csv')]
     
     def _find_csv(keyword):
         """在目录中找包含指定关键词的CSV文件（不区分大小写）"""
@@ -945,27 +954,60 @@ def load_fifa_from_csv(csv_dir, match_name=None):
         for fname in all_csvs:
             if kw in fname.lower():
                 return os.path.join(csv_dir, fname)
-        # 兜底：尝试标准带编号文件名
-        return os.path.join(csv_dir, f'XX_{keyword}.csv')
+        return None
     
-    csv_files = {
-        'match_info': _find_csv('match_info'),
-        'lineups': _find_csv('lineups'),
-        'key_stats': _find_csv('key_stats'),
-        'phases': _find_csv('phases_of_play'),
-        'attempts': _find_csv('attempts_at_goal'),
-        'crosses': _find_csv('crosses'),
-        'offers': _find_csv('offers_to_receive'),
-        'possession_dist': _find_csv('in_possession_distributions'),
-        'possession_offers': _find_csv('in_possession_offers'),
-        'defense': _find_csv('out_of_possession'),
-        'physical': _find_csv('physical_data'),
-        'passing_network': _find_csv('passing_network'),
+    # 核心文件（缺失则报错）
+    CORE_FILES = {
+        'match_info': 'match_info',
+        'lineups': 'lineups',
+        'key_stats': 'key_stats',
+        'attempts': 'attempts_at_goal',
     }
+    
+    # 非核心文件（缺失则跳过对应图表）
+    OPTIONAL_FILES = {
+        'phases': 'phases_of_play',
+        'crosses': 'crosses',
+        'offers': 'offers_to_receive',
+        'possession_dist': 'in_possession_distributions',
+        'possession_offers': 'in_possession_offers',
+        'defense': 'out_of_possession',
+        'physical': 'physical_data',
+        'passing_network': 'passing_network',
+    }
+    
+    # 检查核心文件
+    missing_core = []
+    csv_files = {}
+    for key, keyword in CORE_FILES.items():
+        path = _find_csv(keyword)
+        if path is None:
+            missing_core.append(keyword)
+        csv_files[key] = path
+    
+    if missing_core:
+        raise ValueError(
+            f"缺少核心CSV文件，无法进行分析：{', '.join(missing_core)}\n"
+            f"请确保以下文件存在：match_info, lineups, key_stats, attempts_at_goal"
+        )
+    
+    # 加载非核心文件（缺失时为None）
+    missing_optional = []
+    for key, keyword in OPTIONAL_FILES.items():
+        path = _find_csv(keyword)
+        csv_files[key] = path
+        if path is None:
+            missing_optional.append(keyword)
     
     data = {}
     for key, filepath in csv_files.items():
-        data[key] = _read_csv_safe(filepath)
+        if filepath is not None:
+            data[key] = _read_csv_safe(filepath)
+        else:
+            data[key] = pd.DataFrame()
+    
+    if missing_optional:
+        print(f"[FIFA适配器] 警告：以下非核心文件缺失，对应图表将跳过：{', '.join(missing_optional)}")
     
     # ---- 步骤2：解析比赛基本信息 ----
     match_info_df = data['match_info']
@@ -1261,10 +1303,11 @@ def load_fifa_from_csv(csv_dir, match_name=None):
         stats[team]['possession_pct'] = team_stats[team].get('possession_pct', 50)
     
     # ---- 步骤11.5：提取P0新图表专用数据 ----
-    tactical_radar_data = _extract_tactical_radar_data(data['phases'], teams)
-    line_breaks_data = _extract_line_breaks_data(pos_dist_df, teams)
-    cross_tactics_data = _extract_cross_tactics_data(data['crosses'], pos_dist_df, teams)
-    physical_zones_data = _extract_physical_zones_data(data['physical'], teams)
+    # 每个图表对应其核心数据源，数据源缺失时跳过（返回空字典）
+    tactical_radar_data = _extract_tactical_radar_data(data['phases'], teams) if not data['phases'].empty else {}
+    line_breaks_data = _extract_line_breaks_data(pos_dist_df, teams) if not pos_dist_df.empty else {}
+    cross_tactics_data = _extract_cross_tactics_data(data['crosses'], pos_dist_df, teams) if not data['crosses'].empty else {}
+    physical_zones_data = _extract_physical_zones_data(data['physical'], teams) if not data['physical'].empty else {}
     
     # ---- 步骤12：构建info字典 ----
     info = {
@@ -1283,12 +1326,15 @@ def load_fifa_from_csv(csv_dir, match_name=None):
         # FIFA数据特有的附加信息
         'fifa_extra': {
             'phases_of_play': data['phases'].to_dict('records') if not data['phases'].empty else [],
-            'defensive_stats': True,  # 有防守数据
-            'physical_stats': True,   # 有体能数据
-            'passing_network': True,  # 有传球网络
+            'defensive_stats': not data['defense'].empty,  # 有防守数据
+            'physical_stats': not data['physical'].empty,  # 有体能数据
+            'passing_network': not data['passing_network'].empty,  # 有传球网络
+            'passing_network_data': data['passing_network'] if not data['passing_network'].empty else pd.DataFrame(),  # 传球网络原始数据
+            'player_positions': lineups_df if not lineups_df.empty else pd.DataFrame(),  # 球员位置数据（用于传球网络布局）
             'player_defense_stats': player_defense,  # 球员级防守数据（用于热力图）
             'key_passes_source': 'line_breaks_completed',  # 关键传球数据来源说明
             'fouls_estimated': True,  # 犯规为估算值
+            'missing_files': missing_optional,  # 缺失的非核心文件列表
             # P0新图表数据
             'tactical_radar': tactical_radar_data,    # 战术风格雷达图数据
             'line_breaks': line_breaks_data,          # 防线穿透分析数据
