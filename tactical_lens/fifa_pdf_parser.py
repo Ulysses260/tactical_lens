@@ -1135,8 +1135,8 @@ def parse_fifa_pdf(pdf_path: str, output_dir: str) -> Dict:
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
 
-        # 使用 lazy=True 减少内存占用，按页加载
-        with pdfplumber.open(pdf_path, laparams={'line_margin': 0.5, 'char_margin': 2.0}) as pdf:
+        # 使用默认参数加载，laparams不传避免兼容性问题
+        with pdfplumber.open(pdf_path) as pdf:
             total_pages = len(pdf.pages)
             if total_pages < 5:
                 return {
@@ -1148,8 +1148,8 @@ def parse_fifa_pdf(pdf_path: str, output_dir: str) -> Dict:
                     'output_dir': output_dir,
                 }
 
-            # 先只加载前3页检测页码，减少内存
-            pages = _detect_team_pages_memory_safe(pdf)
+            # 自动检测页码
+            pages = _detect_team_pages(pdf)
 
             output_files = {}
 
