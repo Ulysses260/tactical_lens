@@ -953,22 +953,20 @@ with st.spinner("正在分析..."):
                 df, info, stats = load_fifa_from_csv(csv_dir, match_name)
                 is_fifa_data = True
             except Exception as e:
-                st.error(f"数据加载失败：{e}")
-                st.stop()
-        else:
-            # 不是FIFA，当单文件CSV处理（找第一个CSV）
-            detected_format = "csv"
-            csv_list = [f for f in os.listdir(extract_dir) if f.lower().endswith('.csv')]
-            if not csv_list:
-                st.error("ZIP中未找到CSV文件")
-                st.stop()
-            csv_path = os.path.join(extract_dir, csv_list[0])
-            try:
-                df, info = auto_load(csv_path, match_name=match_name)
-                stats = compute_match_stats(df, info)
-            except Exception as e:
-                st.error(f"数据加载失败：{e}")
-                st.stop()
+                # FIFA加载失败，降级为单文件CSV处理
+                st.warning(f"FIFA格式加载失败（{str(e)[:40]}），已自动降级为单文件模式")
+                detected_format = "csv"
+                csv_list = [f for f in os.listdir(extract_dir) if f.lower().endswith('.csv')]
+                if not csv_list:
+                    st.error("ZIP中未找到可用CSV文件")
+                    st.stop()
+                csv_path = os.path.join(extract_dir, csv_list[0])
+                try:
+                    df, info = auto_load(csv_path, match_name=match_name)
+                    stats = compute_match_stats(df, info)
+                except Exception as e2:
+                    st.error(f"数据加载失败：{e2}")
+                    st.stop()
     
     # ---- 情况3：多个CSV文件 → 先判断是不是FIFA一套 ----
     elif len(csv_files) > 1:
@@ -1001,8 +999,17 @@ with st.spinner("正在分析..."):
                 df, info = result
                 stats = compute_match_stats(df, info)
             except Exception as e:
-                st.error(f"数据加载失败：{e}")
-                st.stop()
+                # FIFA加载失败，降级为单文件CSV处理
+                st.warning(f"FIFA格式加载失败（{str(e)[:40]}），已自动降级为单文件模式")
+                detected_format = "csv_multi_first"
+                first_csv = os.path.join(csv_dir, csv_files[0].name)
+                try:
+                    result = auto_load(first_csv, match_name=match_name)
+                    df, info = result
+                    stats = compute_match_stats(df, info)
+                except Exception as e2:
+                    st.error(f"数据加载失败：{e2}")
+                    st.stop()
     
     # ---- 情况4：单个CSV文件 → 自动识别 ----
     elif len(csv_files) == 1:
