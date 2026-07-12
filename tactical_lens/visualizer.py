@@ -1,7 +1,15 @@
 """
 visualizer.py — 可视化引擎
 生成：射门位置图、传球网络图、射门对比、xG累积曲线、控球时间线、核心数据对比
-风格：深色主题，与HTML报告一致
+风格：专业运动数据报告风（浅色主题，低饱和，克制有质感，类似Opta/StatsBomb）
+
+设计规范：
+- 背景色：浅色纸张感米白/浅灰调 #f8fafc
+- 主色调：深海军蓝 #0f172a（标题、重要文字、主线条）
+- 主队色：深青蓝 #0d9488（Teal，低调专业）
+- 客队色：暖砖橙 #f97316（Warm Orange，与青蓝互补但不刺眼）
+- 网格线：极淡灰 #e2e8f0，只保留横向
+- 字体：Noto Sans SC，统一层级（标题16号粗体、正文10号、数据标注9号）
 
 修复说明：
 - 新增中文字体自动检测与适配（解决Streamlit Cloud Linux环境中文乱码）
@@ -18,15 +26,32 @@ import matplotlib.patches as patches
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib import font_manager
 
-# ========== 全局风格 ==========
-BG_COLOR = '#0d1117'
-PITCH_COLOR = '#1a2332'
-LINE_COLOR = '#3d4f5f'
-TEAM1_COLOR = '#00f5c4'
-TEAM2_COLOR = '#4da6ff'
-GOAL_COLOR = '#f0883e'
-TEXT_COLOR = '#e6edf3'
-GRID_COLOR = '#21262d'
+# ========== 全局风格（专业运动数据报告风） ==========
+# 背景色：浅色纸张感米白/浅灰调
+BG_COLOR = '#f8fafc'
+# 球场色：淡色（接近背景但略深，有层次感）
+PITCH_COLOR = '#f1f5f9'
+# 主线条色：深海军蓝（重要线条/边框）
+LINE_COLOR = '#0f172a'
+# 球场线条色：淡灰（球场标线用更浅的色，不抢数据风头）
+PITCH_LINE_COLOR = '#cbd5e1'
+# 主队色：深青蓝 Teal（低调专业）
+TEAM1_COLOR = '#0d9488'
+# 客队色：暖砖橙 Warm Orange（与青蓝互补但不刺眼）
+TEAM2_COLOR = '#f97316'
+# 进球色：深橙红（醒目但克制）
+GOAL_COLOR = '#ea580c'
+# 辅助色1：雾霾蓝（降饱和版）
+ACCENT_BLUE = '#3b82f6'
+# 辅助色2：深灰
+ACCENT_GRAY = '#475569'
+# 文字层级
+TEXT_PRIMARY = '#0f172a'      # 深海军蓝（标题、重要文字）
+TEXT_COLOR = '#334155'         # 正文色
+TEXT_SECONDARY = '#64748b'    # 次级文字
+TEXT_TERTIARY = '#94a3b8'     # 最次要文字
+# 网格线：极淡灰（只保留横向）
+GRID_COLOR = '#e2e8f0'
 
 
 # ========== 中文字体适配 ==========
@@ -153,15 +178,22 @@ def _ensure_font_setup():
 # 基础rcParams（字体在首次绘图时动态设置）
 plt.rcParams.update({
     'figure.facecolor': BG_COLOR,
-    'axes.facecolor': PITCH_COLOR,
-    'axes.edgecolor': LINE_COLOR,
+    'axes.facecolor': BG_COLOR,
+    'axes.edgecolor': GRID_COLOR,
     'axes.labelcolor': TEXT_COLOR,
-    'text.color': TEXT_COLOR,
-    'xtick.color': LINE_COLOR,
-    'ytick.color': LINE_COLOR,
+    'text.color': TEXT_PRIMARY,
+    'xtick.color': TEXT_SECONDARY,
+    'ytick.color': TEXT_SECONDARY,
     'grid.color': GRID_COLOR,
+    'grid.linestyle': '-',
+    'grid.linewidth': 0.8,
     'font.size': 10,
     'axes.unicode_minus': False,
+    'axes.titlecolor': TEXT_PRIMARY,
+    'axes.titlesize': 12,
+    'legend.frameon': False,
+    'legend.fontsize': 10,
+    'legend.labelcolor': TEXT_COLOR,
 })
 
 
@@ -171,44 +203,46 @@ def draw_pitch(ax, pitch_type='statsbomb'):
     StatsBomb坐标系：x∈[0,120], y∈[0,80]
     """
     if pitch_type == 'statsbomb':
+        # 设置球场背景色
+        ax.set_facecolor(PITCH_COLOR)
         # 外框
-        ax.plot([0, 0, 120, 120, 0], [0, 80, 80, 0, 0], color=LINE_COLOR, lw=1.5)
+        ax.plot([0, 0, 120, 120, 0], [0, 80, 80, 0, 0], color=PITCH_LINE_COLOR, lw=1.2)
         # 中线
-        ax.plot([60, 60], [0, 80], color=LINE_COLOR, lw=1)
+        ax.plot([60, 60], [0, 80], color=PITCH_LINE_COLOR, lw=0.8)
         # 中圈
-        circle = plt.Circle((60, 40), 9.15, fill=False, color=LINE_COLOR, lw=1)
+        circle = plt.Circle((60, 40), 9.15, fill=False, color=PITCH_LINE_COLOR, lw=0.8)
         ax.add_patch(circle)
         # 中点
-        ax.plot(60, 40, 'o', color=LINE_COLOR, markersize=3)
+        ax.plot(60, 40, 'o', color=PITCH_LINE_COLOR, markersize=2.5)
         # 左禁区
-        ax.plot([0, 18, 18, 0], [18, 18, 62, 62], color=LINE_COLOR, lw=1)
+        ax.plot([0, 18, 18, 0], [18, 18, 62, 62], color=PITCH_LINE_COLOR, lw=0.8)
         # 左小禁区
-        ax.plot([0, 6, 6, 0], [30, 30, 50, 50], color=LINE_COLOR, lw=1)
+        ax.plot([0, 6, 6, 0], [30, 30, 50, 50], color=PITCH_LINE_COLOR, lw=0.8)
         # 左罚球点
-        ax.plot(12, 40, 'o', color=LINE_COLOR, markersize=3)
+        ax.plot(12, 40, 'o', color=PITCH_LINE_COLOR, markersize=2.5)
         # 左罚球弧
-        left_arc = patches.Arc((12, 40), 2*9.15, 2*9.15, angle=0, theta1=-53, theta2=53, color=LINE_COLOR, lw=1)
+        left_arc = patches.Arc((12, 40), 2*9.15, 2*9.15, angle=0, theta1=-53, theta2=53, color=PITCH_LINE_COLOR, lw=0.8)
         ax.add_patch(left_arc)
         # 右禁区
-        ax.plot([120, 102, 102, 120], [18, 18, 62, 62], color=LINE_COLOR, lw=1)
+        ax.plot([120, 102, 102, 120], [18, 18, 62, 62], color=PITCH_LINE_COLOR, lw=0.8)
         # 右小禁区
-        ax.plot([120, 114, 114, 120], [30, 30, 50, 50], color=LINE_COLOR, lw=1)
+        ax.plot([120, 114, 114, 120], [30, 30, 50, 50], color=PITCH_LINE_COLOR, lw=0.8)
         # 右罚球点
-        ax.plot(108, 40, 'o', color=LINE_COLOR, markersize=3)
+        ax.plot(108, 40, 'o', color=PITCH_LINE_COLOR, markersize=2.5)
         # 右罚球弧
-        right_arc = patches.Arc((108, 40), 2*9.15, 2*9.15, angle=0, theta1=127, theta2=233, color=LINE_COLOR, lw=1)
+        right_arc = patches.Arc((108, 40), 2*9.15, 2*9.15, angle=0, theta1=127, theta2=233, color=PITCH_LINE_COLOR, lw=0.8)
         ax.add_patch(right_arc)
         # 角球弧
         for cx, cy, t1, t2 in [(0, 0, 0, 90), (0, 80, 270, 360), (120, 0, 90, 180), (120, 80, 180, 270)]:
-            arc = patches.Arc((cx, cy), 2, 2, angle=0, theta1=t1, theta2=t2, color=LINE_COLOR, lw=1)
+            arc = patches.Arc((cx, cy), 2, 2, angle=0, theta1=t1, theta2=t2, color=PITCH_LINE_COLOR, lw=0.8)
             ax.add_patch(arc)
         # 球门
-        ax.plot([-2, 0], [36, 36], color=LINE_COLOR, lw=1.5)
-        ax.plot([-2, 0], [44, 44], color=LINE_COLOR, lw=1.5)
-        ax.plot([-2, -2], [36, 44], color=LINE_COLOR, lw=1.5)
-        ax.plot([120, 122], [36, 36], color=LINE_COLOR, lw=1.5)
-        ax.plot([120, 122], [44, 44], color=LINE_COLOR, lw=1.5)
-        ax.plot([122, 122], [36, 44], color=LINE_COLOR, lw=1.5)
+        ax.plot([-2, 0], [36, 36], color=PITCH_LINE_COLOR, lw=1.2)
+        ax.plot([-2, 0], [44, 44], color=PITCH_LINE_COLOR, lw=1.2)
+        ax.plot([-2, -2], [36, 44], color=PITCH_LINE_COLOR, lw=1.2)
+        ax.plot([120, 122], [36, 36], color=PITCH_LINE_COLOR, lw=1.2)
+        ax.plot([120, 122], [44, 44], color=PITCH_LINE_COLOR, lw=1.2)
+        ax.plot([122, 122], [36, 44], color=PITCH_LINE_COLOR, lw=1.2)
 
         ax.set_xlim(-5, 125)
         ax.set_ylim(-5, 85)
@@ -226,7 +260,7 @@ def draw_shot_map(df, info, stats, output_path=None):
         return None
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 7))
-    fig.suptitle('射门位置图', fontsize=16, color=TEXT_COLOR, y=0.98)
+    fig.suptitle('射门位置图', fontsize=16, color=TEXT_PRIMARY, y=0.98, fontweight='bold')
 
     for idx, (team, color) in enumerate(zip(teams, [TEAM1_COLOR, TEAM2_COLOR])):
         ax = axes[idx]
@@ -234,7 +268,7 @@ def draw_shot_map(df, info, stats, output_path=None):
 
         shots = df[(df['team'] == team) & (df['type'] == 'Shot')].copy()
         if shots.empty:
-            ax.set_title(f'{team}\n（无射门数据）', fontsize=12, color=color, pad=10)
+            ax.set_title(f'{team}\n（无射门数据）', fontsize=12, color=TEXT_SECONDARY, pad=10)
             continue
 
         # 坐标
@@ -247,10 +281,10 @@ def draw_shot_map(df, info, stats, output_path=None):
             shots_total = stats[team]['shots_total']
             
             # 在禁区前沿展示射门数量（示意性分布）
-            ax.text(60, 45, f'⚽ 射门 {shots_total} 次', ha='center', fontsize=14, color=color, fontweight='bold')
-            ax.text(60, 38, f'🎯 射正 {stats[team]["shots_on_target"]} 次', ha='center', fontsize=12, color=color)
-            ax.text(60, 31, f'⭐ 进球 {goals_count} 个', ha='center', fontsize=12, color=GOAL_COLOR)
-            ax.text(60, 24, f'📊 xG {xg_total:.2f}', ha='center', fontsize=12, color=color)
+            ax.text(60, 48, f'射门 {shots_total} 次', ha='center', fontsize=13, color=color, fontweight='bold')
+            ax.text(60, 40, f'射正 {stats[team]["shots_on_target"]} 次', ha='center', fontsize=11, color=TEXT_COLOR)
+            ax.text(60, 32, f'进球 {goals_count} 个', ha='center', fontsize=11, color=GOAL_COLOR, fontweight='bold')
+            ax.text(60, 24, f'xG {xg_total:.2f}', ha='center', fontsize=11, color=TEXT_SECONDARY)
             
             # 画一些示意性的点
             np.random.seed(42)
@@ -265,16 +299,16 @@ def draw_shot_map(df, info, stats, output_path=None):
                 
                 if outcome == 'Goal':
                     ax.scatter(base_x, base_y, s=marker_size, c=GOAL_COLOR, marker='*',
-                               edgecolors='white', linewidths=0.8, zorder=5, alpha=0.9)
+                               edgecolors='white', linewidths=1, zorder=5, alpha=0.95)
                 elif outcome == 'Saved':
                     ax.scatter(base_x, base_y, s=marker_size, c=color, marker='o',
-                               edgecolors='white', linewidths=0.5, zorder=4, alpha=0.7)
+                               edgecolors='white', linewidths=1, zorder=4, alpha=0.75)
                 else:
                     ax.scatter(base_x, base_y, s=marker_size, c=color, marker='o',
-                               edgecolors=LINE_COLOR, linewidths=0.3, zorder=3, alpha=0.4)
+                               edgecolors='white', linewidths=0.8, zorder=3, alpha=0.5)
             
             ax.set_title(f'{team}\n{goals_count}球 | xG {xg_total:.2f} | {shots_total}次射门',
-                          fontsize=12, color=color, pad=10)
+                          fontsize=12, color=color, pad=10, fontweight='bold')
             continue
 
         xs = shots['x'].values
@@ -291,31 +325,32 @@ def draw_shot_map(df, info, stats, output_path=None):
 
             if outcome == 'Goal':
                 ax.scatter(xs[i], ys[i], s=marker_size, c=GOAL_COLOR, marker='*',
-                           edgecolors='white', linewidths=0.8, zorder=5, alpha=0.9)
+                           edgecolors='white', linewidths=1, zorder=5, alpha=0.95)
             elif outcome == 'Saved':
                 ax.scatter(xs[i], ys[i], s=marker_size, c=color, marker='o',
-                           edgecolors='white', linewidths=0.5, zorder=4, alpha=0.7)
+                           edgecolors='white', linewidths=1, zorder=4, alpha=0.75)
             else:
                 ax.scatter(xs[i], ys[i], s=marker_size, c=color, marker='o',
-                           edgecolors=LINE_COLOR, linewidths=0.3, zorder=3, alpha=0.4)
+                           edgecolors='white', linewidths=0.8, zorder=3, alpha=0.5)
 
         goals_count = stats[team]['goals']
         xg_total = stats[team]['xg']
         shots_total = stats[team]['shots_total']
         ax.set_title(f'{team}\n{goals_count}球 | xG {xg_total:.2f} | {shots_total}次射门',
-                      fontsize=12, color=color, pad=10)
+                      fontsize=12, color=color, pad=10, fontweight='bold')
 
-    # 图例
+    # 图例（放在顶部）
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], marker='*', color='w', markerfacecolor=GOAL_COLOR, markersize=12, label='进球', linestyle='None'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor=TEAM1_COLOR, markersize=8, label='射正', linestyle='None'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markersize=8, label='射偏/被封', linestyle='None', alpha=0.5),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor=TEAM1_COLOR, markersize=8, label=f'{teams[0]}射正', linestyle='None', alpha=0.75),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor=TEAM2_COLOR, markersize=8, label=f'{teams[1]}射正', linestyle='None', alpha=0.75),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor=TEXT_TERTIARY, markersize=8, label='射偏/被封', linestyle='None', alpha=0.5),
     ]
-    fig.legend(handles=legend_elements, loc='lower center', ncol=3, frameon=False,
-               fontsize=10, bbox_to_anchor=(0.5, -0.02))
+    fig.legend(handles=legend_elements, loc='upper center', ncol=4, frameon=False,
+               fontsize=10, bbox_to_anchor=(0.5, 0.93), labelcolor=TEXT_COLOR)
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
 
     if output_path:
         fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
@@ -340,7 +375,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
         return None
 
     fig, axes = plt.subplots(1, 2, figsize=(16, 8))
-    fig.suptitle('传球网络图', fontsize=16, color=TEXT_COLOR, y=0.97)
+    fig.suptitle('传球网络图', fontsize=16, color=TEXT_PRIMARY, y=0.97, fontweight='bold')
 
     for idx, (team, color) in enumerate(zip(teams, [TEAM1_COLOR, TEAM2_COLOR])):
         ax = axes[idx]
@@ -455,7 +490,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
                     short_name = player.split()[-1] if ' ' in str(player) else str(player)
                     ax.annotate(short_name, (pos_info['x'], pos_info['y']),
                                textcoords="offset points", xytext=(0, 10),
-                               fontsize=7.5, ha='center', color=TEXT_COLOR, 
+                               fontsize=7.5, ha='center', color=TEXT_PRIMARY, 
                                fontweight='bold', alpha=0.9, zorder=5)
             
             # ---- TOP5移到球场右侧（球场外）----
@@ -549,7 +584,7 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
             short_name = player.split()[-1] if ' ' in str(player) else str(player)
             ax.annotate(short_name, (pos['x'], pos['y']),
                         textcoords="offset points", xytext=(0, 8),
-                        fontsize=7, ha='center', color=TEXT_COLOR, alpha=0.8)
+                        fontsize=7, ha='center', color=TEXT_PRIMARY, alpha=0.9, fontweight='bold')
 
         formation = stats[team].get('formation', 'N/A')
         acc = stats[team]['pass_accuracy']
@@ -687,7 +722,7 @@ def draw_shot_comparison(stats, output_path=None):
     x = np.arange(len(metrics))
     width = 0.35
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 7))
     bars1 = ax.bar(x - width/2, v1, width, label=t1, color=TEAM1_COLOR, alpha=0.85, edgecolor='none')
     bars2 = ax.bar(x + width/2, v2, width, label=t2, color=TEAM2_COLOR, alpha=0.85, edgecolor='none')
 
@@ -696,20 +731,24 @@ def draw_shot_comparison(stats, output_path=None):
         h = bar.get_height()
         if h > 0:
             ax.text(bar.get_x() + bar.get_width()/2., h + 0.3, f'{h:.0f}',
-                    ha='center', va='bottom', fontsize=9, color=TEAM1_COLOR)
+                    ha='center', va='bottom', fontsize=9, color=TEXT_SECONDARY, fontweight='bold')
     for bar in bars2:
         h = bar.get_height()
         if h > 0:
             ax.text(bar.get_x() + bar.get_width()/2., h + 0.3, f'{h:.0f}',
-                    ha='center', va='bottom', fontsize=9, color=TEAM2_COLOR)
+                    ha='center', va='bottom', fontsize=9, color=TEXT_SECONDARY, fontweight='bold')
 
     ax.set_xticks(x)
-    ax.set_xticklabels(metrics)
-    ax.legend(frameon=False, fontsize=11)
-    ax.set_title('射门数据对比', fontsize=14, pad=15)
+    ax.set_xticklabels(metrics, fontsize=10, color=TEXT_COLOR)
+    ax.legend(loc='upper right', frameon=False, fontsize=11)
+    ax.set_title('射门数据对比', fontsize=16, pad=15, color=TEXT_PRIMARY, fontweight='bold')
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.grid(axis='y', alpha=0.3)
+    ax.spines['left'].set_color(GRID_COLOR)
+    ax.spines['bottom'].set_color(GRID_COLOR)
+    ax.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax.grid(axis='y', alpha=0.6)
+    ax.set_axisbelow(True)  # 网格在柱子后面
 
     plt.tight_layout()
 
@@ -731,7 +770,7 @@ def draw_xg_flow(df, info, stats, output_path=None):
     if len(teams) < 2:
         return None
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 7))
 
     for team, color in zip(teams, [TEAM1_COLOR, TEAM2_COLOR]):
         shots = df[(df['team'] == team) & (df['type'] == 'Shot')].copy()
@@ -761,34 +800,38 @@ def draw_xg_flow(df, info, stats, output_path=None):
         half2_start = 45
         has_half2 = any(t > half2_start for t in times) if len(times) > 0 else False
 
-        # 画线
+        # 画线（2.5px 粗线）
         all_times = np.concatenate([[0], times])
         all_xgs = np.concatenate([[0], xgs])
-        ax.plot(all_times, all_xgs, color=color, lw=2, label=team, alpha=0.9)
-        ax.fill_between(all_times, all_xgs, alpha=0.1, color=color)
+        ax.plot(all_times, all_xgs, color=color, lw=2.5, label=team, alpha=0.95)
+        ax.fill_between(all_times, all_xgs, alpha=0.15, color=color)
 
         # 进球标记
         goal_shots = shots[shots['shot_outcome'] == 'Goal']
         for _, row in goal_shots.iterrows():
-            ax.scatter(row[time_col], row[xg_col], s=100, c=GOAL_COLOR,
-                       marker='*', edgecolors='white', linewidths=0.8, zorder=5)
+            ax.scatter(row[time_col], row[xg_col], s=120, c=GOAL_COLOR,
+                       marker='*', edgecolors='white', linewidths=1, zorder=5)
             ax.annotate('⚽', (row[time_col], row[xg_col]),
                         textcoords="offset points", xytext=(5, 8),
                         fontsize=10, color=GOAL_COLOR)
 
     # 半场线
-    ax.axvline(x=45, color=LINE_COLOR, lw=1, linestyle='--', alpha=0.6)
-    ax.text(22.5, ax.get_ylim()[1] * 0.95, '上半场', ha='center', fontsize=9, color=LINE_COLOR, alpha=0.7)
+    ax.axvline(x=45, color=TEXT_TERTIARY, lw=1, linestyle='--', alpha=0.7)
+    ax.text(22.5, ax.get_ylim()[1] * 0.95, '上半场', ha='center', fontsize=9, color=TEXT_TERTIARY)
     if has_half2:
-        ax.text(67.5, ax.get_ylim()[1] * 0.95, '下半场', ha='center', fontsize=9, color=LINE_COLOR, alpha=0.7)
+        ax.text(67.5, ax.get_ylim()[1] * 0.95, '下半场', ha='center', fontsize=9, color=TEXT_TERTIARY)
 
-    ax.set_xlabel('分钟')
-    ax.set_ylabel('累积 xG')
-    ax.set_title('xG 累积曲线', fontsize=14, pad=15)
-    ax.legend(frameon=False, fontsize=11)
+    ax.set_xlabel('分钟', fontsize=10, color=TEXT_COLOR)
+    ax.set_ylabel('累积 xG', fontsize=10, color=TEXT_COLOR)
+    ax.set_title('xG 累积曲线', fontsize=16, pad=15, color=TEXT_PRIMARY, fontweight='bold')
+    ax.legend(loc='upper left', frameon=False, fontsize=11)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.grid(alpha=0.3)
+    ax.spines['left'].set_color(GRID_COLOR)
+    ax.spines['bottom'].set_color(GRID_COLOR)
+    ax.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax.grid(axis='y', alpha=0.6)
+    ax.set_axisbelow(True)
 
     plt.tight_layout()
 
@@ -820,7 +863,7 @@ def draw_possession_timeline(df, info, stats, output_path=None, window=5):
         # 没有possession_team，退化为用事件数代替
         return _draw_possession_by_events(df, info, stats, output_path, window)
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 7))
 
     max_min = int(df[time_col].max())
     bins = list(range(0, max_min + window, window))
@@ -829,17 +872,21 @@ def draw_possession_timeline(df, info, stats, output_path=None, window=5):
         team_df = df[df['possession_team'] == team]
         counts, edges = np.histogram(team_df[time_col].dropna(), bins=bins)
         centers = [(edges[i] + edges[i+1]) / 2 for i in range(len(counts))]
-        ax.plot(centers, counts, color=color, lw=2, label=team, alpha=0.85)
-        ax.fill_between(centers, counts, alpha=0.1, color=color)
+        ax.plot(centers, counts, color=color, lw=2.5, label=team, alpha=0.95)
+        ax.fill_between(centers, counts, alpha=0.2, color=color)
 
-    ax.axvline(x=45, color=LINE_COLOR, lw=1, linestyle='--', alpha=0.6)
-    ax.set_xlabel('分钟')
-    ax.set_ylabel('控球事件数')
-    ax.set_title(f'控球时间线（{window}分钟窗口）', fontsize=14, pad=15)
-    ax.legend(frameon=False, fontsize=11)
+    ax.axvline(x=45, color=TEXT_TERTIARY, lw=1, linestyle='--', alpha=0.7)
+    ax.set_xlabel('分钟', fontsize=10, color=TEXT_COLOR)
+    ax.set_ylabel('控球事件数', fontsize=10, color=TEXT_COLOR)
+    ax.set_title(f'控球时间线（{window}分钟窗口）', fontsize=16, pad=15, color=TEXT_PRIMARY, fontweight='bold')
+    ax.legend(loc='upper left', frameon=False, fontsize=11)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.grid(alpha=0.3)
+    ax.spines['left'].set_color(GRID_COLOR)
+    ax.spines['bottom'].set_color(GRID_COLOR)
+    ax.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax.grid(axis='y', alpha=0.6)
+    ax.set_axisbelow(True)
 
     plt.tight_layout()
 
@@ -868,7 +915,7 @@ def _draw_possession_by_events(df, info, stats, output_path=None, window=5):
     if time_col is None:
         return None
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 7))
 
     max_min = int(df[time_col].max())
     bins = list(range(0, max_min + window, window))
@@ -877,17 +924,21 @@ def _draw_possession_by_events(df, info, stats, output_path=None, window=5):
         team_df = df[df['team'] == team]
         counts, edges = np.histogram(team_df[time_col].dropna(), bins=bins)
         centers = [(edges[i] + edges[i+1]) / 2 for i in range(len(counts))]
-        ax.plot(centers, counts, color=color, lw=2, label=team, alpha=0.85)
-        ax.fill_between(centers, counts, alpha=0.1, color=color)
+        ax.plot(centers, counts, color=color, lw=2.5, label=team, alpha=0.95)
+        ax.fill_between(centers, counts, alpha=0.2, color=color)
 
-    ax.axvline(x=45, color=LINE_COLOR, lw=1, linestyle='--', alpha=0.6)
-    ax.set_xlabel('分钟')
-    ax.set_ylabel('事件数')
-    ax.set_title(f'比赛节奏时间线（{window}分钟窗口）', fontsize=14, pad=15)
-    ax.legend(frameon=False, fontsize=11)
+    ax.axvline(x=45, color=TEXT_TERTIARY, lw=1, linestyle='--', alpha=0.7)
+    ax.set_xlabel('分钟', fontsize=10, color=TEXT_COLOR)
+    ax.set_ylabel('事件数', fontsize=10, color=TEXT_COLOR)
+    ax.set_title(f'比赛节奏时间线（{window}分钟窗口）', fontsize=16, pad=15, color=TEXT_PRIMARY, fontweight='bold')
+    ax.legend(loc='upper left', frameon=False, fontsize=11)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.grid(alpha=0.3)
+    ax.spines['left'].set_color(GRID_COLOR)
+    ax.spines['bottom'].set_color(GRID_COLOR)
+    ax.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax.grid(axis='y', alpha=0.6)
+    ax.set_axisbelow(True)
 
     plt.tight_layout()
 
@@ -931,7 +982,7 @@ def draw_stats_bar(stats, output_path=None):
     y = np.arange(len(labels))
     height = 0.35
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 7))
     bars1 = ax.barh(y - height/2, v1, height, label=t1, color=TEAM1_COLOR, alpha=0.85)
     bars2 = ax.barh(y + height/2, v2, height, label=t2, color=TEAM2_COLOR, alpha=0.85)
 
@@ -939,19 +990,23 @@ def draw_stats_bar(stats, output_path=None):
     for bar in bars1:
         w = bar.get_width()
         ax.text(w + 0.5, bar.get_y() + bar.get_height()/2., f'{w:.1f}',
-                ha='left', va='center', fontsize=9, color=TEAM1_COLOR)
+                ha='left', va='center', fontsize=9, color=TEXT_SECONDARY, fontweight='bold')
     for bar in bars2:
         w = bar.get_width()
         ax.text(w + 0.5, bar.get_y() + bar.get_height()/2., f'{w:.1f}',
-                ha='left', va='center', fontsize=9, color=TEAM2_COLOR)
+                ha='left', va='center', fontsize=9, color=TEXT_SECONDARY, fontweight='bold')
 
     ax.set_yticks(y)
-    ax.set_yticklabels(labels)
-    ax.legend(frameon=False, fontsize=11)
-    ax.set_title('核心数据对比', fontsize=14, pad=15)
+    ax.set_yticklabels(labels, fontsize=10, color=TEXT_COLOR)
+    ax.legend(loc='lower right', frameon=False, fontsize=11)
+    ax.set_title('核心数据对比', fontsize=16, pad=15, color=TEXT_PRIMARY, fontweight='bold')
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.grid(axis='x', alpha=0.3)
+    ax.spines['left'].set_color(GRID_COLOR)
+    ax.spines['bottom'].set_color(GRID_COLOR)
+    ax.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax.grid(axis='x', alpha=0.6)
+    ax.set_axisbelow(True)
 
     plt.tight_layout()
 
@@ -990,7 +1045,7 @@ def draw_pressure_heatmap(df, info, stats, team=None, output_path=None, bins=(12
     if n == 1:
         axes = [axes]
 
-    fig.suptitle('防守行为热力图', fontsize=16, color=TEXT_COLOR, y=0.98)
+    fig.suptitle('防守行为热力图', fontsize=16, color=TEXT_PRIMARY, y=0.98, fontweight='bold')
 
     for idx, t in enumerate(target_teams):
         ax = axes[idx]
@@ -1036,7 +1091,7 @@ def draw_pressure_heatmap(df, info, stats, team=None, output_path=None, bins=(12
                             if score > max_score * 0.3:  # 只标注防守贡献大的球员
                                 ax.annotate(short_name, (x, y),
                                            textcoords="offset points", xytext=(0, 0),
-                                           fontsize=7, ha='center', color='white', 
+                                           fontsize=7, ha='center', color=TEXT_PRIMARY, 
                                            fontweight='bold', alpha=0.9, zorder=5)
                         
                         ax.set_title(f'{t}\n（球员防守强度分布）', fontsize=12, color=color, pad=10)
@@ -1088,11 +1143,12 @@ def draw_pressure_heatmap(df, info, stats, team=None, output_path=None, bins=(12
             pass
 
         extent = [0, 120, 0, 80]
-        cmap = LinearSegmentedColormap.from_list('custom',
-            [PITCH_COLOR, color, '#ffffff'], N=256)
+        # 单一色系渐变：从淡青蓝到深青蓝，专业克制
+        cmap = LinearSegmentedColormap.from_list('custom_heat',
+            ['#f0fdfa', '#99f6e4', '#2dd4bf', '#0d9488', '#0f766e', '#134e4a'], N=256)
 
         ax.imshow(heatmap.T, extent=extent, origin='lower', cmap=cmap,
-                  alpha=0.6, aspect='auto', interpolation='bilinear')
+                  alpha=0.7, aspect='auto', interpolation='bilinear')
 
         ax.set_title(f'{t}', fontsize=12, color=color, pad=10)
 
@@ -1163,28 +1219,28 @@ def draw_tactical_radar(df, info, stats, output_path=None):
         t1_closed = t1_vals + t1_vals[:1]
         t2_closed = t2_vals + t2_vals[:1]
         
-        ax.set_facecolor(PITCH_COLOR)
+        ax.set_facecolor(BG_COLOR)
         
-        # 绘制两队雷达
-        ax.plot(angles_closed, t1_closed, color=TEAM1_COLOR, lw=2.5, label=t1, alpha=0.9)
-        ax.fill(angles_closed, t1_closed, color=TEAM1_COLOR, alpha=0.15)
-        ax.plot(angles_closed, t2_closed, color=TEAM2_COLOR, lw=2.5, label=t2, alpha=0.9)
-        ax.fill(angles_closed, t2_closed, color=TEAM2_COLOR, alpha=0.15)
+        # 绘制两队雷达（半透明填充）
+        ax.plot(angles_closed, t1_closed, color=TEAM1_COLOR, lw=2.5, label=t1, alpha=0.95)
+        ax.fill(angles_closed, t1_closed, color=TEAM1_COLOR, alpha=0.2)
+        ax.plot(angles_closed, t2_closed, color=TEAM2_COLOR, lw=2.5, label=t2, alpha=0.95)
+        ax.fill(angles_closed, t2_closed, color=TEAM2_COLOR, alpha=0.2)
         
-        # 设置轴标签（增大字体和间距，避免重叠）
+        # 设置轴标签
         ax.set_xticks(angles)
         ax.set_xticklabels(dims, color=TEXT_COLOR, fontsize=11)
         
-        # 设置径向网格
+        # 设置径向网格（淡灰色）
         ax.set_ylim(0, r_limit)
         ax.set_yticks(np.linspace(0, global_max, 5))
         ax.set_yticklabels([f'{int(v)}' for v in np.linspace(0, global_max, 5)],
-                          color=LINE_COLOR, fontsize=8)
-        ax.grid(color=LINE_COLOR, alpha=0.3)
-        ax.spines['polar'].set_color(LINE_COLOR)
+                          color=TEXT_TERTIARY, fontsize=8)
+        ax.grid(color=GRID_COLOR, alpha=0.8, lw=0.8)
+        ax.spines['polar'].set_color(GRID_COLOR)
         
         # 标题
-        ax.set_title(f'{icon} {title}', fontsize=15, color=TEXT_COLOR, 
+        ax.set_title(f'{icon} {title}', fontsize=14, color=TEXT_PRIMARY, 
                     pad=30, fontweight='bold')
     
     # 绘制进攻雷达
@@ -1196,11 +1252,11 @@ def draw_tactical_radar(df, info, stats, output_path=None):
     # 统一图例（放在两图中间上方，标题下方）
     handles, labels = ax_attack.get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', ncol=2, 
-              frameon=False, fontsize=13, bbox_to_anchor=(0.5, 0.93),
+              frameon=False, fontsize=12, bbox_to_anchor=(0.5, 0.93),
               labelcolor=TEXT_COLOR)
     
     # 总标题（移到最上方，与图例错开）
-    fig.suptitle('战术风格雷达图', fontsize=18, color=TEXT_COLOR, y=0.98, fontweight='bold')
+    fig.suptitle('战术风格雷达图', fontsize=18, color=TEXT_PRIMARY, y=0.98, fontweight='bold')
     
     plt.tight_layout(rect=[0, 0, 1, 0.89])
     
@@ -1244,7 +1300,7 @@ def draw_line_breaks(df, info, stats, output_path=None):
     
     # 上半部分：分组柱状图
     ax1 = fig.add_subplot(2, 1, 1)
-    ax1.set_facecolor(PITCH_COLOR)
+    ax1.set_facecolor(BG_COLOR)
     
     metrics = ['尝试次数', '成功次数', '突破后进球']
     v1 = [lb_data[t1]['attempts'], lb_data[t1]['completed'], lb_data[t1]['goals']]
@@ -1261,12 +1317,12 @@ def draw_line_breaks(df, info, stats, output_path=None):
         h = bar.get_height()
         if h > 0:
             ax1.text(bar.get_x() + bar.get_width()/2., h + 0.3, f'{h:.0f}',
-                    ha='center', va='bottom', fontsize=10, color=TEAM1_COLOR, fontweight='bold')
+                    ha='center', va='bottom', fontsize=10, color=TEXT_SECONDARY, fontweight='bold')
     for bar in bars2:
         h = bar.get_height()
         if h > 0:
             ax1.text(bar.get_x() + bar.get_width()/2., h + 0.3, f'{h:.0f}',
-                    ha='center', va='bottom', fontsize=10, color=TEAM2_COLOR, fontweight='bold')
+                    ha='center', va='bottom', fontsize=10, color=TEXT_SECONDARY, fontweight='bold')
     
     # 成功率标注
     ax1.text(0, max(v1[0], v2[0]) * 0.5, 
@@ -1277,20 +1333,21 @@ def draw_line_breaks(df, info, stats, output_path=None):
              ha='left', fontsize=10, color=TEAM2_COLOR, fontweight='bold')
     
     ax1.set_xticks(x)
-    ax1.set_xticklabels(metrics, fontsize=11)
-    ax1.legend(frameon=False, fontsize=11)
-    ax1.set_title('防线穿透分析', fontsize=14, pad=15, color=TEXT_COLOR)
+    ax1.set_xticklabels(metrics, fontsize=11, color=TEXT_COLOR)
+    ax1.legend(loc='upper right', frameon=False, fontsize=11)
+    ax1.set_title('防线穿透分析', fontsize=16, pad=15, color=TEXT_PRIMARY, fontweight='bold')
     ax1.spines['top'].set_visible(False)
     ax1.spines['right'].set_visible(False)
-    ax1.spines['left'].set_color(LINE_COLOR)
-    ax1.spines['bottom'].set_color(LINE_COLOR)
-    ax1.tick_params(colors=TEXT_COLOR)
-    ax1.grid(axis='y', alpha=0.3)
+    ax1.spines['left'].set_color(GRID_COLOR)
+    ax1.spines['bottom'].set_color(GRID_COLOR)
+    ax1.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax1.grid(axis='y', alpha=0.6)
+    ax1.set_axisbelow(True)
     
     # 下半部分：球员TOP3排行
     ax2 = fig.add_subplot(2, 1, 2)
-    ax2.set_facecolor(PITCH_COLOR)
-    ax2.set_title('突破球员TOP3（按成功次数）', fontsize=12, pad=10, color=TEXT_COLOR)
+    ax2.set_facecolor(BG_COLOR)
+    ax2.set_title('突破球员TOP3（按成功次数）', fontsize=13, pad=10, color=TEXT_PRIMARY, fontweight='bold')
     
     # 两队TOP3并排展示
     top1 = lb_data[t1].get('top_players', [])
@@ -1318,7 +1375,7 @@ def draw_line_breaks(df, info, stats, output_path=None):
             ax2.text(0.25, y, text, ha='center', fontsize=10, color=TEXT_COLOR,
                     transform=ax2.transAxes)
         else:
-            ax2.text(0.25, y, f'{i+1}. —', ha='center', fontsize=10, color=LINE_COLOR,
+            ax2.text(0.25, y, f'{i+1}. —', ha='center', fontsize=10, color=TEXT_TERTIARY,
                     transform=ax2.transAxes)
         
         # 队2球员
@@ -1331,7 +1388,7 @@ def draw_line_breaks(df, info, stats, output_path=None):
             ax2.text(0.75, y, text, ha='center', fontsize=10, color=TEXT_COLOR,
                     transform=ax2.transAxes)
         else:
-            ax2.text(0.75, y, f'{i+1}. —', ha='center', fontsize=10, color=LINE_COLOR,
+            ax2.text(0.75, y, f'{i+1}. —', ha='center', fontsize=10, color=TEXT_TERTIARY,
                     transform=ax2.transAxes)
     
     ax2.axis('off')
@@ -1375,10 +1432,11 @@ def draw_cross_tactics(df, info, stats, output_path=None):
     if t1 not in cross_data or t2 not in cross_data:
         return None
     
-    # 传中类型和颜色
+    # 传中类型和颜色（同色系不同深浅：青蓝色系从浅到深，专业克制）
     cross_types_en = ['inswing', 'outswing', 'driven', 'lofted', 'cutback', 'push_cross']
     cn_names = cross_data[t1].get('type_names_cn', {})
-    cross_type_colors = ['#00f5c4', '#4da6ff', '#f0883e', '#a78bfa', '#34d399', '#fbbf24']
+    # 青蓝色系6种深浅，从浅到深
+    cross_type_colors = ['#ccfbf1', '#99f6e4', '#5eead4', '#2dd4bf', '#14b8a6', '#0d9488']
     
     fig = plt.figure(figsize=(16, 9))
     fig.patch.set_facecolor(BG_COLOR)
@@ -1400,13 +1458,13 @@ def draw_cross_tactics(df, info, stats, output_path=None):
             labeldistance=1.15
         )
         for at in autotexts1:
-            at.set_fontsize(12)
+            at.set_fontsize(11)
             at.set_fontweight('bold')
-            at.set_color('white')
+            at.set_color(TEXT_PRIMARY)
     else:
-        ax1.text(0.5, 0.5, '无类型数据', ha='center', va='center', color=LINE_COLOR, fontsize=12)
+        ax1.text(0.5, 0.5, '无类型数据', ha='center', va='center', color=TEXT_TERTIARY, fontsize=12)
     
-    ax1.set_title(f'{t1}\n传中类型分布', fontsize=13, color=TEAM1_COLOR, pad=15)
+    ax1.set_title(f'{t1}\n传中类型分布', fontsize=13, color=TEAM1_COLOR, pad=15, fontweight='bold')
     
     # 中间饼图：T2
     ax2 = fig.add_subplot(1, 3, 2)
@@ -1423,17 +1481,17 @@ def draw_cross_tactics(df, info, stats, output_path=None):
             labeldistance=1.15
         )
         for at in autotexts2:
-            at.set_fontsize(12)
+            at.set_fontsize(11)
             at.set_fontweight('bold')
-            at.set_color('white')
+            at.set_color(TEXT_PRIMARY)
     else:
-        ax2.text(0.5, 0.5, '无类型数据', ha='center', va='center', color=LINE_COLOR, fontsize=12)
+        ax2.text(0.5, 0.5, '无类型数据', ha='center', va='center', color=TEXT_TERTIARY, fontsize=12)
     
-    ax2.set_title(f'{t2}\n传中类型分布', fontsize=13, color=TEAM2_COLOR, pad=15)
+    ax2.set_title(f'{t2}\n传中类型分布', fontsize=13, color=TEAM2_COLOR, pad=15, fontweight='bold')
     
     # 右侧：传中成功率对比
     ax3 = fig.add_subplot(1, 3, 3)
-    ax3.set_facecolor(PITCH_COLOR)
+    ax3.set_facecolor(BG_COLOR)
     
     t1_rate = cross_data[t1]['success_rate']
     t2_rate = cross_data[t2]['success_rate']
@@ -1451,22 +1509,23 @@ def draw_cross_tactics(df, info, stats, output_path=None):
     for i, (bar, rate) in enumerate(zip(bars, rates)):
         w = bar.get_width()
         ax3.text(w + 1, bar.get_y() + bar.get_height()/2., f'{rate:.1f}%',
-                ha='left', va='center', fontsize=11, color=bar_colors[i], fontweight='bold')
+                ha='left', va='center', fontsize=11, color=TEXT_SECONDARY, fontweight='bold')
     
     ax3.set_xlim(0, 100)
-    ax3.set_xlabel('成功率 %', color=TEXT_COLOR)
-    ax3.set_title('传中成功率', fontsize=12, color=TEXT_COLOR, pad=10)
+    ax3.set_xlabel('成功率 %', color=TEXT_COLOR, fontsize=10)
+    ax3.set_title('传中成功率', fontsize=13, color=TEXT_PRIMARY, pad=10, fontweight='bold')
     ax3.spines['top'].set_visible(False)
     ax3.spines['right'].set_visible(False)
-    ax3.spines['left'].set_color(LINE_COLOR)
-    ax3.spines['bottom'].set_color(LINE_COLOR)
-    ax3.tick_params(colors=TEXT_COLOR)
-    ax3.grid(axis='x', alpha=0.3)
+    ax3.spines['left'].set_color(GRID_COLOR)
+    ax3.spines['bottom'].set_color(GRID_COLOR)
+    ax3.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax3.grid(axis='x', alpha=0.6)
+    ax3.set_axisbelow(True)
     
     # 底部添加总传中数信息
     fig.text(0.5, 0.02, 
              f'总传中数：{t1} {t1_total}次（成功{t1_comp}） | {t2} {t2_total}次（成功{t2_comp}）',
-             ha='center', fontsize=10, color=LINE_COLOR)
+             ha='center', fontsize=10, color=TEXT_SECONDARY)
     
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])
     
@@ -1505,18 +1564,18 @@ def draw_physical_zones(df, info, stats, output_path=None):
     if t1 not in phys_data or t2 not in phys_data:
         return None
     
-    # 五分区（高区分度渐变色：深灰→蓝→青→橙→红）
+    # 五分区（低饱和渐变色：深灰→雾霾蓝→青蓝→暖橙→砖红，克制专业）
     zone_keys = ['zone1_walk', 'zone2_jog', 'zone3_run', 'zone4_low_sprint', 'zone5_high_sprint']
     cn_names = phys_data[t1].get('zone_names_cn', {})
-    # 从冷到暖的高区分度渐变色系
-    zone_colors = ['#4b5563', '#3b82f6', '#06b6d4', '#f97316', '#dc2626']
+    # 从冷到暖的低饱和渐变色系（更克制有质感）
+    zone_colors = ['#64748b', '#3b82f6', '#0891b2', '#f97316', '#dc2626']
     
     fig = plt.figure(figsize=(16, 10))
     fig.patch.set_facecolor(BG_COLOR)
     
     # 上半部分：堆叠柱状图
     ax1 = fig.add_subplot(2, 1, 1)
-    ax1.set_facecolor(PITCH_COLOR)
+    ax1.set_facecolor(BG_COLOR)
     
     # 获取两队各分区距离（转换为公里）
     t1_zones = [phys_data[t1]['zones'].get(z, 0) / 1000 for z in zone_keys]
@@ -1527,7 +1586,6 @@ def draw_physical_zones(df, info, stats, output_path=None):
     # 堆叠柱状图（水平方向，两队并列）
     y_positions = [1, 0]
     team_labels = [t1, t2]
-    team_colors_zones = [[TEAM1_COLOR]*5, [TEAM2_COLOR]*5]
     
     # 绘制堆叠条
     left1 = np.zeros(1)
@@ -1544,16 +1602,17 @@ def draw_physical_zones(df, info, stats, output_path=None):
         left2[0] += t2_zones[i]
     
     ax1.set_yticks([1, 0])
-    ax1.set_yticklabels([t1, t2], fontsize=11)
-    ax1.set_xlabel('距离 (km)', color=TEXT_COLOR)
-    ax1.set_title('体能五分区分布（全队总距离）', fontsize=14, pad=15, color=TEXT_COLOR)
+    ax1.set_yticklabels([t1, t2], fontsize=11, color=TEXT_COLOR)
+    ax1.set_xlabel('距离 (km)', color=TEXT_COLOR, fontsize=10)
+    ax1.set_title('体能五分区分布（全队总距离）', fontsize=16, pad=15, color=TEXT_PRIMARY, fontweight='bold')
     ax1.legend(loc='upper right', bbox_to_anchor=(1, 1), frameon=False, fontsize=9, ncol=5)
     ax1.spines['top'].set_visible(False)
     ax1.spines['right'].set_visible(False)
-    ax1.spines['left'].set_color(LINE_COLOR)
-    ax1.spines['bottom'].set_color(LINE_COLOR)
-    ax1.tick_params(colors=TEXT_COLOR)
-    ax1.grid(axis='x', alpha=0.3)
+    ax1.spines['left'].set_color(GRID_COLOR)
+    ax1.spines['bottom'].set_color(GRID_COLOR)
+    ax1.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax1.grid(axis='x', alpha=0.6)
+    ax1.set_axisbelow(True)
     
     # 添加总距离标注
     t1_total = phys_data[t1]['total_distance'] / 1000
@@ -1565,7 +1624,7 @@ def draw_physical_zones(df, info, stats, output_path=None):
     
     # 下半部分：冲刺次数对比 + 最高速度TOP3
     ax2 = fig.add_subplot(2, 1, 2)
-    ax2.set_facecolor(PITCH_COLOR)
+    ax2.set_facecolor(BG_COLOR)
     
     # 左侧：冲刺次数对比
     t1_sprints = phys_data[t1]['sprints_count']
@@ -1582,7 +1641,7 @@ def draw_physical_zones(df, info, stats, output_path=None):
     
     # 柱状图颜色与分区色系呼应：冲刺用暖色系，高速跑用冷色系，两队有明确对比
     # 队1：冲刺橙，高速跑青；队2：冲刺红，高速跑蓝
-    t1_sprint_colors = ['#f97316', '#06b6d4']
+    t1_sprint_colors = ['#f97316', '#0891b2']
     t2_sprint_colors = ['#dc2626', '#3b82f6']
     
     for i in range(len(sprint_metrics)):
@@ -1594,15 +1653,16 @@ def draw_physical_zones(df, info, stats, output_path=None):
                label=t2 if i == 0 else "")
     
     ax2.set_xticks(x_sprint)
-    ax2.set_xticklabels(sprint_metrics, fontsize=10)
-    ax2.set_ylabel('次数', color=TEXT_COLOR)
+    ax2.set_xticklabels(sprint_metrics, fontsize=10, color=TEXT_COLOR)
+    ax2.set_ylabel('次数', color=TEXT_COLOR, fontsize=10)
     ax2.legend(frameon=False, fontsize=10, loc='upper left')
     ax2.spines['top'].set_visible(False)
     ax2.spines['right'].set_visible(False)
-    ax2.spines['left'].set_color(LINE_COLOR)
-    ax2.spines['bottom'].set_color(LINE_COLOR)
-    ax2.tick_params(colors=TEXT_COLOR)
-    ax2.grid(axis='y', alpha=0.3)
+    ax2.spines['left'].set_color(GRID_COLOR)
+    ax2.spines['bottom'].set_color(GRID_COLOR)
+    ax2.tick_params(colors=TEXT_SECONDARY, labelsize=9)
+    ax2.grid(axis='y', alpha=0.6)
+    ax2.set_axisbelow(True)
     
     # 右侧：最高速度TOP3
     top1 = phys_data[t1].get('top_speed_players', [])
@@ -1610,7 +1670,7 @@ def draw_physical_zones(df, info, stats, output_path=None):
     
     # 在右侧添加文本区
     ax2_right = ax2.twinx()
-    ax2_right.set_facecolor(PITCH_COLOR)
+    ax2_right.set_facecolor(BG_COLOR)
     ax2_right.set_ylim(ax2.get_ylim())
     ax2_right.set_yticks([])
     ax2_right.spines['top'].set_visible(False)
@@ -1620,7 +1680,7 @@ def draw_physical_zones(df, info, stats, output_path=None):
     y_max = max(t1_sprints, t2_sprints, t1_hsr, t2_hsr)
     
     ax2.text(1.55, y_max * 0.95, '⚡ 最高速度 TOP3', 
-             ha='left', fontsize=11, color='#f0883e', fontweight='bold')
+             ha='left', fontsize=11, color=GOAL_COLOR, fontweight='bold')
     
     for i in range(3):
         y_pos = y_max * (0.75 - i * 0.2)
@@ -1632,7 +1692,7 @@ def draw_physical_zones(df, info, stats, output_path=None):
             ax2.text(1.3, y_pos, f'{i+1}. {short_name}: {p["top_speed"]:.1f} km/h',
                     ha='left', fontsize=9, color=TEAM1_COLOR)
         else:
-            ax2.text(1.3, y_pos, f'{i+1}. —', ha='left', fontsize=9, color=LINE_COLOR)
+            ax2.text(1.3, y_pos, f'{i+1}. —', ha='left', fontsize=9, color=TEXT_TERTIARY)
         
         # 队2
         if i < len(top2):
@@ -1641,7 +1701,7 @@ def draw_physical_zones(df, info, stats, output_path=None):
             ax2.text(1.85, y_pos, f'{i+1}. {short_name}: {p["top_speed"]:.1f} km/h',
                     ha='left', fontsize=9, color=TEAM2_COLOR)
         else:
-            ax2.text(1.85, y_pos, f'{i+1}. —', ha='left', fontsize=9, color=LINE_COLOR)
+            ax2.text(1.85, y_pos, f'{i+1}. —', ha='left', fontsize=9, color=TEXT_TERTIARY)
     
     # 队名标题
     ax2.text(1.3, y_max * 0.88, t1, ha='left', fontsize=10, color=TEAM1_COLOR, fontweight='bold')
