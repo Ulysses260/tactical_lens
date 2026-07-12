@@ -223,7 +223,7 @@ def _page_decorator(canvas, doc):
     canvas.setFont(FONT_CN, 8)
     canvas.setFillColor(HexColor(SUBTEXT_COLOR))
     canvas.drawCentredString(page_w / 2, 8*mm, f"第 {doc.page} 页")
-    canvas.drawString(margin, 8*mm, "⚽ 战术透镜")
+    canvas.drawString(margin, 8*mm, "■ 战术透镜")
     canvas.drawRightString(page_w - margin, 8*mm, "tactical-lens.app")
     
     canvas.restoreState()
@@ -346,7 +346,7 @@ class TacticalReportGenerator:
         story.append(Spacer(1, 25*mm))
         
         # Logo / 标识
-        logo_text = Paragraph("⚽", ParagraphStyle(
+        logo_text = Paragraph("■", ParagraphStyle(
             'logo', fontName=FONT_CN, fontSize=48, alignment=TA_CENTER,
             textColor=HexColor(ACCENT_COLOR), spaceAfter=5,
         ))
@@ -390,12 +390,12 @@ class TacticalReportGenerator:
         # 比赛信息
         info_lines = []
         if self.competition:
-            info_lines.append(f"🏆 {self.competition}")
+            info_lines.append(f"赛事：{self.competition}")
         if self.match_date:
-            info_lines.append(f"📅 {self.match_date}")
+            info_lines.append(f"日期：{self.match_date}")
         if self.stadium:
-            info_lines.append(f"🏟️ {self.stadium}")
-        info_lines.append(f"📊 数据来源：FIFA 比赛报告")
+            info_lines.append(f"球场：{self.stadium}")
+        info_lines.append(f"数据来源：FIFA 比赛报告")
         
         for line in info_lines:
             story.append(Paragraph(line, ParagraphStyle(
@@ -757,7 +757,7 @@ class TacticalReportGenerator:
         weakness_items = self._get_defense_weakness()
         if weakness_items:
             for item in weakness_items:
-                story.append(Paragraph(f"⚠️ {item}", s['body']))
+                story.append(Paragraph(f"[!] {item}", s['body']))
         else:
             story.append(Paragraph("暂无明显防线漏洞数据。", s['body']))
         
@@ -935,13 +935,13 @@ class TacticalReportGenerator:
         style_summary = self._generate_style_summary()
         
         # 主队风格
-        story.append(Paragraph(f"<b>🏠 {self.team1}</b>", s['sub_section']))
+        story.append(Paragraph(f"<b>[主] {self.team1}</b>", s['sub_section']))
         story.append(Paragraph(style_summary[self.team1], s['body']))
         
         story.append(Spacer(1, 3*mm))
         
         # 客队风格
-        story.append(Paragraph(f"<b>✈️ {self.team2}</b>", s['sub_section']))
+        story.append(Paragraph(f"<b>[客] {self.team2}</b>", s['sub_section']))
         story.append(Paragraph(style_summary[self.team2], s['body']))
         
         story.append(Spacer(1, 5*mm))
@@ -1190,7 +1190,7 @@ class TacticalReportGenerator:
         if attack_insights:
             for i, ins in enumerate(attack_insights[:7]):
                 priority = ins.get('priority', 3)
-                priority_icon = {1: '🔴', 2: '🟡', 3: '⚪'}.get(priority, '·')
+                priority_icon = {1: '●', 2: '○', 3: '·'}.get(priority, '·')
                 category = ins.get('category', '')
                 text = ins.get('text', '')
                 
@@ -1200,7 +1200,7 @@ class TacticalReportGenerator:
                 ))
                 if ins.get('suggestion'):
                     story.append(Paragraph(
-                        f"<i>💡 {ins['suggestion']}</i>",
+                        f"<i>建议：{ins['suggestion']}</i>",
                         ParagraphStyle(
                             'suggestion', fontName=FONT_CN, fontSize=9, leading=13,
                             textColor=HexColor(SUBTEXT_COLOR), alignment=TA_JUSTIFY,
@@ -1216,7 +1216,7 @@ class TacticalReportGenerator:
         if defense_insights:
             for i, ins in enumerate(defense_insights[:7]):
                 priority = ins.get('priority', 3)
-                priority_icon = {1: '🔴', 2: '🟡', 3: '⚪'}.get(priority, '·')
+                priority_icon = {1: '●', 2: '○', 3: '·'}.get(priority, '·')
                 category = ins.get('category', '')
                 text = ins.get('text', '')
                 
@@ -1226,7 +1226,7 @@ class TacticalReportGenerator:
                 ))
                 if ins.get('suggestion'):
                     story.append(Paragraph(
-                        f"<i>💡 {ins['suggestion']}</i>",
+                        f"<i>建议：{ins['suggestion']}</i>",
                         ParagraphStyle(
                             'suggestion', fontName=FONT_CN, fontSize=9, leading=13,
                             textColor=HexColor(SUBTEXT_COLOR), alignment=TA_JUSTIFY,
