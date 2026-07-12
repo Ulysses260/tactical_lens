@@ -876,7 +876,7 @@ def draw_tactical_radar(df, info, stats, output_path=None):
     """战术风格雷达图：对比两队攻防战术风格
     
     FIFA专属图表，StatsBomb模式返回None。
-    进攻维度7个 + 防守维度7个，共14维雷达图。
+    采用双子图设计：左侧进攻雷达（7维），右侧防守雷达（7维），避免14个标签重叠。
     百分比归一化，展示各维度占比。
     """
     _ensure_font_setup()
@@ -898,63 +898,75 @@ def draw_tactical_radar(df, info, stats, output_path=None):
     if t1 not in radar_data or t2 not in radar_data:
         return None
     
-    # 合并所有维度：进攻 + 防守
     attack_dims = radar_data[t1]['attack_dims']
     defense_dims = radar_data[t1]['defense_dims']
-    all_dims = attack_dims + defense_dims
-    n_dims = len(all_dims)
     
     # 获取两队各维度数值
-    t1_values = [radar_data[t1]['attack'].get(d, 0) for d in attack_dims] + \
-                [radar_data[t1]['defense'].get(d, 0) for d in defense_dims]
-    t2_values = [radar_data[t2]['attack'].get(d, 0) for d in attack_dims] + \
-                [radar_data[t2]['defense'].get(d, 0) for d in defense_dims]
+    t1_attack = [radar_data[t1]['attack'].get(d, 0) for d in attack_dims]
+    t2_attack = [radar_data[t2]['attack'].get(d, 0) for d in attack_dims]
+    t1_defense = [radar_data[t1]['defense'].get(d, 0) for d in defense_dims]
+    t2_defense = [radar_data[t2]['defense'].get(d, 0) for d in defense_dims]
     
-    # 雷达图角度
-    angles = np.linspace(0, 2 * np.pi, n_dims, endpoint=False).tolist()
-    t1_values_closed = t1_values + t1_values[:1]
-    t2_values_closed = t2_values + t2_values[:1]
-    angles_closed = angles + angles[:1]
+    # 计算全局最大值，保持两图刻度一致便于对比
+    all_values = t1_attack + t2_attack + t1_defense + t2_defense
+    global_max = max(all_values) if all_values else 100
+    r_limit = global_max * 1.15
     
-    fig, ax = plt.subplots(figsize=(12, 8), subplot_kw=dict(polar=True))
+    # ===== 双子图布局：左进攻，右防守 =====
+    fig, (ax_attack, ax_defense) = plt.subplots(
+        1, 2, figsize=(16, 9), 
+        subplot_kw=dict(polar=True)
+    )
     fig.patch.set_facecolor(BG_COLOR)
-    ax.set_facecolor(PITCH_COLOR)
     
-    # 绘制两队雷达
-    ax.plot(angles_closed, t1_values_closed, color=TEAM1_COLOR, lw=2, label=t1, alpha=0.9)
-    ax.fill(angles_closed, t1_values_closed, color=TEAM1_COLOR, alpha=0.15)
-    ax.plot(angles_closed, t2_values_closed, color=TEAM2_COLOR, lw=2, label=t2, alpha=0.9)
-    ax.fill(angles_closed, t2_values_closed, color=TEAM2_COLOR, alpha=0.15)
+    # ---- 辅助函数：绘制单个雷达图 ----
+    def _draw_radar(ax, dims, t1_vals, t2_vals, title, icon):
+        n = len(dims)
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
+        angles_closed = angles + angles[:1]
+        t1_closed = t1_vals + t1_vals[:1]
+        t2_closed = t2_vals + t2_vals[:1]
+        
+        ax.set_facecolor(PITCH_COLOR)
+        
+        # 绘制两队雷达
+        ax.plot(angles_closed, t1_closed, color=TEAM1_COLOR, lw=2.5, label=t1, alpha=0.9)
+        ax.fill(angles_closed, t1_closed, color=TEAM1_COLOR, alpha=0.15)
+        ax.plot(angles_closed, t2_closed, color=TEAM2_COLOR, lw=2.5, label=t2, alpha=0.9)
+        ax.fill(angles_closed, t2_closed, color=TEAM2_COLOR, alpha=0.15)
+        
+        # 设置轴标签（增大字体和间距，避免重叠）
+        ax.set_xticks(angles)
+        ax.set_xticklabels(dims, color=TEXT_COLOR, fontsize=11)
+        
+        # 设置径向网格
+        ax.set_ylim(0, r_limit)
+        ax.set_yticks(np.linspace(0, global_max, 5))
+        ax.set_yticklabels([f'{int(v)}' for v in np.linspace(0, global_max, 5)],
+                          color=LINE_COLOR, fontsize=8)
+        ax.grid(color=LINE_COLOR, alpha=0.3)
+        ax.spines['polar'].set_color(LINE_COLOR)
+        
+        # 标题
+        ax.set_title(f'{icon} {title}', fontsize=15, color=TEXT_COLOR, 
+                    pad=30, fontweight='bold')
     
-    # 设置轴标签
-    ax.set_xticks(angles)
-    ax.set_xticklabels(all_dims, color=TEXT_COLOR, fontsize=10)
+    # 绘制进攻雷达
+    _draw_radar(ax_attack, attack_dims, t1_attack, t2_attack, '进攻端', '⚔')
     
-    # 设置径向网格
-    ax.set_ylim(0, max(max(t1_values), max(t2_values)) * 1.1)
-    ax.tick_params(axis='y', colors=LINE_COLOR, labelsize=8)
-    ax.grid(color=LINE_COLOR, alpha=0.3)
-    ax.spines['polar'].set_color(LINE_COLOR)
+    # 绘制防守雷达
+    _draw_radar(ax_defense, defense_dims, t1_defense, t2_defense, '防守端', '🛡')
     
-    # 用分隔线区分进攻和防守区域
-    mid_idx = len(attack_dims) - 0.5
-    ax.axvline(x=angles[int(mid_idx)], color='#f0883e', lw=1.5, linestyle='--', alpha=0.6)
-    ax.axvline(x=angles[-1] + (angles[1] - angles[0]) * 0.5, 
-               color='#f0883e', lw=1.5, linestyle='--', alpha=0.6)
+    # 统一图例（放在两图中间上方）
+    handles, labels = ax_attack.get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', ncol=2, 
+              frameon=False, fontsize=13, bbox_to_anchor=(0.5, 0.98),
+              labelcolor=TEXT_COLOR)
     
-    # 添加攻/防标注
-    attack_angle = angles[len(attack_dims) // 2]
-    defense_angle = angles[len(attack_dims) + len(defense_dims) // 2]
-    r_max = max(max(t1_values), max(t2_values)) * 1.15
-    ax.text(attack_angle, r_max, '⚔ 进攻', ha='center', va='center', 
-            fontsize=12, color='#f0883e', fontweight='bold')
-    ax.text(defense_angle, r_max, '🛡 防守', ha='center', va='center', 
-            fontsize=12, color='#f0883e', fontweight='bold')
+    # 总标题
+    fig.suptitle('战术风格雷达图', fontsize=18, color=TEXT_COLOR, y=0.97, fontweight='bold')
     
-    ax.set_title('战术风格雷达图', fontsize=16, color=TEXT_COLOR, pad=25)
-    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1), frameon=False, fontsize=11)
-    
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
     
     if output_path:
         fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
