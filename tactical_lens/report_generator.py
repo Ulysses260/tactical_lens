@@ -830,7 +830,7 @@ class TacticalReportGenerator:
             
             issues = []
             if opp_xg > 1.5:
-                issues.append(f"被创造{xg:.1f}xG的得分机会".replace('{xg}', f'{opp_xg}'))
+                issues.append(f"被创造{opp_xg:.1f}xG的得分机会")
             if opp_shots > 12:
                 issues.append(f"被射门{opp_shots}次，防守压力较大")
             
