@@ -402,18 +402,28 @@ with st.spinner("正在分析..."):
         attack_insights = []
         defense_insights = []
 
-    # 4. 生成图表
-    chart_paths = generate_all_charts(df, info, stats, output_dir=output_dir)
-
+    # 4. 生成图表（逐个图表try-except，单个失败不影响其他）
+    chart_paths = {}
+    try:
+        chart_paths = generate_all_charts(df, info, stats, output_dir=output_dir)
+    except Exception as e:
+        st.warning(f"⚠️ 部分图表生成失败：{e}")
+    
     # 5. 生成报告
     template_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         'templates', f'{template_name}.json'
     )
     template = ReportTemplate(template_path)
-    text_report = generate_text_report(stats, insights, info, template)
+    
+    text_report = ""
     html_path = os.path.join(output_dir, 'report.html')
-    generate_html_report(stats, insights, info, chart_paths, template, output_path=html_path)
+    try:
+        text_report = generate_text_report(stats, insights, info, template)
+        generate_html_report(stats, insights, info, chart_paths, template, output_path=html_path)
+    except Exception as e:
+        st.warning(f"⚠️ 报告生成异常：{e}")
+        text_report = f"报告生成异常：{e}"
 
 # ========== 展示结果 ==========
 teams = list(stats.keys())
@@ -515,6 +525,11 @@ if len(teams) >= 2:
     if is_fifa_data:
         st.subheader("🎯 FIFA专属战术分析")
         st.caption("基于FIFA比赛报告深度数据的专属战术图表")
+        
+        # 缺文件提示
+        if info and info.get('fifa_extra', {}).get('missing_files'):
+            missing = info['fifa_extra']['missing_files']
+            st.info(f"📋 提示：缺少 {len(missing)} 个非核心数据文件（{', '.join(missing)}），对应图表将自动跳过")
         
         # FIFA图表 — 第四排（1列，战术雷达大图）
         chart_display_row4 = [
