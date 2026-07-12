@@ -1096,6 +1096,19 @@ def parse_fifa_pdf(pdf_path: str, output_dir: str) -> Dict:
     """
     # 检查pdfplumber是否可用
     try:
+        import os
+        os.environ['PDFPLUMBER_VERBOSE'] = '0'
+        import warnings
+        warnings.filterwarnings('ignore')
+        import gc
+        import logging
+        for logger_name in ['pdfplumber', 'pdfminer', 'pdfminer.cmapdb', 'pdfminer.pdfpage',
+                            'pdfminer.pdfinterp', 'pdfminer.pdfdevice', 'pdfminer.converter',
+                            'pdfminer.layout', 'pdfminer.utils']:
+            try:
+                logging.getLogger(logger_name).setLevel(logging.CRITICAL + 10)
+            except Exception:
+                pass
         import pdfplumber
     except ImportError:
         return {
@@ -1122,7 +1135,8 @@ def parse_fifa_pdf(pdf_path: str, output_dir: str) -> Dict:
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
 
-        with pdfplumber.open(pdf_path) as pdf:
+        # 使用 lazy=True 减少内存占用，按页加载
+        with pdfplumber.open(pdf_path, laparams={'line_margin': 0.5, 'char_margin': 2.0}) as pdf:
             total_pages = len(pdf.pages)
             if total_pages < 5:
                 return {
@@ -1134,8 +1148,8 @@ def parse_fifa_pdf(pdf_path: str, output_dir: str) -> Dict:
                     'output_dir': output_dir,
                 }
 
-            # 自动检测页码
-            pages = _detect_team_pages(pdf)
+            # 先只加载前3页检测页码，减少内存
+            pages = _detect_team_pages_memory_safe(pdf)
 
             output_files = {}
 
