@@ -73,7 +73,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ========== 自定义CSS：专业运动数据报告风格 ==========
+# ========== 自定义CSS：深色专业运动数据报告风格 ==========
 st.markdown("""
 <style>
     /* ===== 全局字体与基础样式 ===== */
@@ -87,7 +87,7 @@ st.markdown("""
     
     /* ===== 标题样式 ===== */
     h1 {
-        color: #0f172a !important;
+        color: #f1f5f9 !important;
         font-weight: 700 !important;
         letter-spacing: -0.02em;
         padding-bottom: 0.75rem;
@@ -95,33 +95,38 @@ st.markdown("""
     }
     
     h2, .stSubheader > div > div > div > p {
-        color: #0f172a !important;
+        color: #e2e8f0 !important;
         font-weight: 600 !important;
         letter-spacing: -0.01em;
     }
     
     h3 {
-        color: #1e293b !important;
+        color: #cbd5e1 !important;
         font-weight: 600 !important;
+    }
+    
+    p, span, div {
+        color: #cbd5e1;
     }
     
     /* ===== 卡片样式 ===== */
     .data-card {
-        background: #ffffff;
+        background: #1e293b;
         border-radius: 12px;
         padding: 1.25rem 1.5rem;
-        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-        border: 1px solid #e2e8f0;
-        transition: box-shadow 0.2s ease;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+        border: 1px solid #334155;
+        transition: box-shadow 0.2s ease, border-color 0.2s ease;
     }
     
     .data-card:hover {
-        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.04);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+        border-color: #475569;
     }
     
     .data-card-label {
         font-size: 0.75rem;
-        color: #64748b;
+        color: #94a3b8;
         font-weight: 500;
         text-transform: uppercase;
         letter-spacing: 0.05em;
@@ -131,7 +136,7 @@ st.markdown("""
     .data-card-value {
         font-size: 1.75rem;
         font-weight: 700;
-        color: #0f172a;
+        color: #f1f5f9;
         line-height: 1.2;
     }
     
@@ -149,6 +154,7 @@ st.markdown("""
         margin-bottom: 2rem;
         position: relative;
         overflow: hidden;
+        border: 1px solid #334155;
     }
     
     .match-banner::before {
@@ -235,7 +241,7 @@ st.markdown("""
         align-items: center;
         margin: 2.5rem 0 1.25rem 0;
         padding-bottom: 0.75rem;
-        border-bottom: 2px solid #e2e8f0;
+        border-bottom: 2px solid #334155;
     }
     
     .section-header-icon {
@@ -246,26 +252,39 @@ st.markdown("""
     .section-header-title {
         font-size: 1.25rem;
         font-weight: 700;
-        color: #0f172a;
+        color: #f1f5f9;
         flex: 1;
     }
     
     .section-header-tag {
         font-size: 0.75rem;
         padding: 0.25rem 0.75rem;
-        background: #f1f5f9;
-        color: #64748b;
+        background: #1e293b;
+        color: #94a3b8;
         border-radius: 999px;
         font-weight: 500;
+        border: 1px solid #334155;
     }
     
     /* ===== 侧边栏样式 ===== */
     section[data-testid="stSidebar"] {
-        background-color: #f1f5f9 !important;
+        background-color: #0f172a !important;
+        border-right: 1px solid #334155;
     }
     
     section[data-testid="stSidebar"] .block-container {
         padding-top: 1rem !important;
+    }
+    
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] div,
+    section[data-testid="stSidebar"] label {
+        color: #cbd5e1 !important;
+    }
+    
+    section[data-testid="stSidebar"] small {
+        color: #64748b !important;
     }
     
     .sidebar-header {
@@ -273,6 +292,7 @@ st.markdown("""
         margin: -1rem -1rem 1rem -1rem;
         padding: 1.5rem 1.25rem;
         border-radius: 0 0 16px 16px;
+        border-bottom: 1px solid #334155;
     }
     
     .sidebar-logo {
@@ -283,13 +303,13 @@ st.markdown("""
     .sidebar-title {
         font-size: 1.25rem;
         font-weight: 700;
-        color: #ffffff;
+        color: #ffffff !important;
         margin: 0;
     }
     
     .sidebar-subtitle {
         font-size: 0.75rem;
-        color: #94a3b8;
+        color: #94a3b8 !important;
         margin-top: 0.25rem;
     }
     
@@ -302,9 +322,9 @@ st.markdown("""
     
     /* ===== 上传框样式 ===== */
     [data-testid="stFileUploader"] {
-        border: 2px dashed #e2e8f0;
+        border: 2px dashed #334155;
         border-radius: 10px;
-        background: #ffffff;
+        background: #1e293b;
         transition: border-color 0.2s ease;
     }
     
@@ -332,6 +352,19 @@ st.markdown("""
         background-color: #115e59;
     }
     
+    .stButton > button {
+        background-color: #1e293b;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        transition: all 0.2s ease;
+    }
+    
+    .stButton > button:hover {
+        background-color: #334155;
+        border-color: #475569;
+    }
+    
     /* ===== PDF下载大按钮 ===== */
     .pdf-download-card {
         background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
@@ -344,49 +377,51 @@ st.markdown("""
         font-size: 1rem;
         font-weight: 600;
         margin-bottom: 0.25rem;
+        color: #ffffff !important;
     }
     
     .pdf-download-desc {
         font-size: 0.8rem;
         opacity: 0.9;
+        color: rgba(255,255,255,0.85) !important;
     }
     
     /* ===== 分割线 ===== */
     hr {
-        border-color: #e2e8f0 !important;
+        border-color: #334155 !important;
         margin: 1.5rem 0;
     }
     
     /* ===== 洞察卡片 ===== */
     .insight-card {
-        background: #ffffff;
+        background: #1e293b;
         border-radius: 10px;
         padding: 1rem 1.25rem;
         margin-bottom: 0.75rem;
         border-left: 4px solid #0d9488;
-        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     }
     
     .insight-card.priority-1 {
-        border-left-color: #dc2626;
-        background: #fef2f2;
+        border-left-color: #ef4444;
+        background: #1c1917;
     }
     
     .insight-card.priority-2 {
-        border-left-color: #d97706;
-        background: #fffbeb;
+        border-left-color: #f97316;
+        background: #1c1917;
     }
     
     .insight-card.priority-3 {
         border-left-color: #64748b;
-        background: #f8fafc;
+        background: #1e293b;
     }
     
     /* ===== 表格样式 ===== */
     .stDataFrame {
         border-radius: 10px;
         overflow: hidden;
-        border: 1px solid #e2e8f0;
+        border: 1px solid #334155;
     }
     
     /* ===== 隐藏默认菜单和页脚 ===== */
@@ -396,7 +431,11 @@ st.markdown("""
     /* ===== 展开面板样式 ===== */
     .streamlit-expanderHeader {
         font-weight: 600;
-        color: #334155;
+        color: #94a3b8;
+    }
+    
+    .streamlit-expanderContent {
+        background: #0f172a;
     }
     
     /* ===== 指标对比条 ===== */
@@ -405,7 +444,7 @@ st.markdown("""
         align-items: center;
         justify-content: space-between;
         padding: 0.6rem 0;
-        border-bottom: 1px solid #f1f5f9;
+        border-bottom: 1px solid #334155;
     }
     
     .metric-row:last-child {
@@ -413,7 +452,7 @@ st.markdown("""
     }
     
     .metric-label {
-        color: #64748b;
+        color: #94a3b8;
         font-size: 0.85rem;
     }
     
@@ -440,7 +479,7 @@ st.markdown("""
     .metric-bar-container {
         width: 80px;
         height: 6px;
-        background: #f1f5f9;
+        background: #334155;
         border-radius: 3px;
         position: relative;
         overflow: hidden;
@@ -462,6 +501,102 @@ st.markdown("""
         height: 100%;
         background: #f97316;
         border-radius: 0 3px 3px 0;
+    }
+    
+    /* ===== 首页提示信息条 ===== */
+    .stAlert [data-testid="stAlertContainer"] {
+        background: #1e293b !important;
+        border: 1px solid #334155 !important;
+        color: #cbd5e1 !important;
+    }
+    
+    .stAlert p,
+    .stAlert span,
+    .stAlert div {
+        color: #cbd5e1 !important;
+    }
+    
+    /* ===== caption 小字 ===== */
+    .stCaption, small, [data-testid="stCaptionContainer"] {
+        color: #64748b !important;
+    }
+    
+    /* ===== 代码块 ===== */
+    .stCodeBlock > div {
+        background: #0f172a !important;
+        border: 1px solid #334155 !important;
+    }
+    
+    .stCodeBlock pre,
+    .stCodeBlock code {
+        color: #e2e8f0 !important;
+        background: transparent !important;
+    }
+    
+    /* ===== 下拉选择框 ===== */
+    .stSelectbox > div > div > select {
+        background-color: #1e293b;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+        border-radius: 8px;
+    }
+    
+    .stSelectbox > div > div > select:focus {
+        border-color: #0d9488;
+    }
+    
+    /* ===== 输入框 ===== */
+    .stTextInput > div > div > input {
+        background-color: #1e293b;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+        border-radius: 8px;
+    }
+    
+    .stTextInput > div > div > input:focus {
+        border-color: #0d9488;
+    }
+    
+    /* ===== 上传框内部文字 ===== */
+    [data-testid="stFileUploader"] p,
+    [data-testid="stFileUploader"] span,
+    [data-testid="stFileUploader"] small {
+        color: #94a3b8 !important;
+    }
+    
+    [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzoneInstructions"] > div {
+        color: #94a3b8 !important;
+    }
+    
+    /* ===== 图片说明文字 ===== */
+    [data-testid="stImageCaption"] {
+        color: #64748b !important;
+    }
+    
+    /* ===== 折叠面板内部 ===== */
+    .streamlit-expanderContent p,
+    .streamlit-expanderContent span,
+    .streamlit-expanderContent div {
+        color: #cbd5e1;
+    }
+    
+    /* ===== DataFrame 深色模式 ===== */
+    .stDataFrame [data-testid="stTableStyledTable"] {
+        background-color: #1e293b !important;
+    }
+    
+    .stDataFrame table {
+        color: #cbd5e1 !important;
+    }
+    
+    .stDataFrame th {
+        background-color: #334155 !important;
+        color: #f1f5f9 !important;
+    }
+    
+    .stDataFrame td {
+        background-color: #1e293b !important;
+        color: #cbd5e1 !important;
     }
     
     /* ===== 响应式调整 ===== */
@@ -684,7 +819,7 @@ if not has_data:
         st.markdown("""
         <div class="data-card" style="margin-bottom: 1rem;">
             <div class="data-card-label">专业级</div>
-            <div class="data-card-value" style="font-size: 1.1rem; color: #0f172a;">StatsBomb 事件流</div>
+            <div class="data-card-value" style="font-size: 1.1rem; color: #e2e8f0;">StatsBomb 事件流</div>
             <div class="data-card-sub">最完整的逐事件分析</div>
         </div>
         """, unsafe_allow_html=True)
@@ -692,14 +827,14 @@ if not has_data:
         st.markdown("""
         <div class="data-card" style="margin-bottom: 1rem;">
             <div class="data-card-label">灵活导入</div>
-            <div class="data-card-value" style="font-size: 1.1rem; color: #0f172a;">FIFA 多文件CSV</div>
+            <div class="data-card-value" style="font-size: 1.1rem; color: #e2e8f0;">FIFA 多文件CSV</div>
             <div class="data-card-sub">有几个传几个，缺数据自动降级</div>
         </div>
         """, unsafe_allow_html=True)
         st.markdown("""
         <div class="data-card" style="margin-bottom: 1rem;">
             <div class="data-card-label">体能专用</div>
-            <div class="data-card-value" style="font-size: 1.1rem; color: #0f172a;">Catapult 追踪数据</div>
+            <div class="data-card-value" style="font-size: 1.1rem; color: #e2e8f0;">Catapult 追踪数据</div>
             <div class="data-card-sub">体育科学体能分析</div>
         </div>
         """, unsafe_allow_html=True)
@@ -722,7 +857,7 @@ if not has_data:
             st.markdown(f"""
             <div class="data-card" style="text-align: center;">
                 <div style="font-size: 2rem; font-weight: 800; color: #0d9488; margin-bottom: 0.5rem;">{num}</div>
-                <div style="font-weight: 600; color: #0f172a; margin-bottom: 0.25rem;">{title}</div>
+                <div style="font-weight: 600; color: #e2e8f0; margin-bottom: 0.25rem;">{title}</div>
                 <div class="data-card-sub">{desc}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -1224,11 +1359,11 @@ if len(teams) >= 2:
                 priority_icon = {"1": "🔴", "2": "🟡", "3": "⚪"}.get(priority, "·")
                 st.markdown(f"""
                 <div class="insight-card priority-{priority}">
-                    <div style="font-weight: 600; color: #0f172a; margin-bottom: 0.25rem;">
-                        {priority_icon} <span style="color: #64748b; font-size: 0.8rem; font-weight: 500;">[{ins['category']}]</span>
+                    <div style="font-weight: 600; color: #f1f5f9; margin-bottom: 0.25rem;">
+                        {priority_icon} <span style="color: #94a3b8; font-size: 0.8rem; font-weight: 500;">[{ins['category']}]</span>
                     </div>
-                    <div style="color: #334155; font-size: 0.9rem;">{ins['text']}</div>
-                    {f'<div style="color: #64748b; font-size: 0.8rem; margin-top: 0.5rem;">💡 {ins["suggestion"]}</div>' if ins.get('suggestion') else ''}
+                    <div style="color: #e2e8f0; font-size: 0.9rem;">{ins['text']}</div>
+                    {f'<div style="color: #94a3b8; font-size: 0.8rem; margin-top: 0.5rem;">{ins["suggestion"]}</div>' if ins.get('suggestion') else ''}
                 </div>
                 """, unsafe_allow_html=True)
         
@@ -1239,11 +1374,11 @@ if len(teams) >= 2:
                 priority_icon = {"1": "🔴", "2": "🟡", "3": "⚪"}.get(priority, "·")
                 st.markdown(f"""
                 <div class="insight-card priority-{priority}">
-                    <div style="font-weight: 600; color: #0f172a; margin-bottom: 0.25rem;">
-                        {priority_icon} <span style="color: #64748b; font-size: 0.8rem; font-weight: 500;">[{ins['category']}]</span>
+                    <div style="font-weight: 600; color: #f1f5f9; margin-bottom: 0.25rem;">
+                        {priority_icon} <span style="color: #94a3b8; font-size: 0.8rem; font-weight: 500;">[{ins['category']}]</span>
                     </div>
-                    <div style="color: #334155; font-size: 0.9rem;">{ins['text']}</div>
-                    {f'<div style="color: #64748b; font-size: 0.8rem; margin-top: 0.5rem;">💡 {ins["suggestion"]}</div>' if ins.get('suggestion') else ''}
+                    <div style="color: #e2e8f0; font-size: 0.9rem;">{ins['text']}</div>
+                    {f'<div style="color: #94a3b8; font-size: 0.8rem; margin-top: 0.5rem;">{ins["suggestion"]}</div>' if ins.get('suggestion') else ''}
                 </div>
                 """, unsafe_allow_html=True)
     else:
