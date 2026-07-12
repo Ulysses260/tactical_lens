@@ -327,16 +327,20 @@ def draw_shot_map(df, info, stats, output_path=None):
 
 
 # ========== 传球网络图 ==========
-def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
-    """传球网络图：节点=球员平均位置，边=传球次数，节点大小=传球量"""
+def draw_pass_network(df, info, stats, output_path=None, min_passes=2):
+    """传球网络图：节点=球员平均位置，边=传球次数，节点大小=传球量
+    
+    FIFA模式：从passing_network CSV提取传球连线，球员按位置分层布局（GK/DF/MF/FW），
+              TOP5列表移到球场右侧，连线颜色用球队主色半透明色。
+    """
     _ensure_font_setup()
     
     teams = list(stats.keys())
     if len(teams) < 2:
         return None
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
-    fig.suptitle('传球网络图', fontsize=16, color=TEXT_COLOR, y=0.98)
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    fig.suptitle('传球网络图', fontsize=16, color=TEXT_COLOR, y=0.97)
 
     for idx, (team, color) in enumerate(zip(teams, [TEAM1_COLOR, TEAM2_COLOR])):
         ax = axes[idx]
@@ -344,12 +348,142 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
 
         team_passes = df[(df['team'] == team) & (df['type'] == 'Pass')].copy()
         
-        # 检查是否有FIFA传球网络数据（info['fifa_extra']）
+        # ===== FIFA模式：从passing_network CSV提取连线数据 =====
         fifa_pn = None
-        if info and info.get('source') == 'fifa' and info.get('fifa_extra', {}).get('passing_network'):
-            # FIFA模式：从传球网络CSV获取数据（在适配器中已存入info）
-            pass
+        fifa_positions = None
+        is_fifa = info and info.get('source') == 'fifa'
+        if is_fifa:
+            fifa_extra = info.get('fifa_extra', {})
+            fifa_pn = fifa_extra.get('passing_network_data')
+            fifa_positions = fifa_extra.get('player_positions')
+        
+        if is_fifa and fifa_pn is not None and not fifa_pn.empty:
+            # --- FIFA模式：画有连线的传球网络 ---
+            team_pn = fifa_pn[fifa_pn['team'] == team].copy() if 'team' in fifa_pn.columns else fifa_pn.copy()
             
+            if team_pn.empty:
+                ax.set_title(f'{team}\n（无传球网络数据）', fontsize=12, color=color, pad=10)
+                continue
+            
+            # 收集所有球员及其总传球次数（作为传出方）
+            player_total_passes = {}
+            if 'from_player' in team_pn.columns and 'passes' in team_pn.columns:
+                player_total_passes = team_pn.groupby('from_player')['passes'].sum().to_dict()
+            
+            # 根据位置分配球员坐标（分层布局）
+            player_coords = _assign_player_positions(team, fifa_positions, player_total_passes)
+            
+            # 补充：把传球网络中出现但不在lineups中的球员也加进去
+            # 根据总传球次数推断位置（传球多→中场，中→后卫/前锋，少→前锋）
+            if player_total_passes:
+                # 找出不在lineups中的球员
+                missing_players = [p for p in player_total_passes.keys() 
+                                 if not _match_player_key(p, player_coords)]
+                
+                if missing_players:
+                    # 按传球次数排序
+                    sorted_missing = sorted(missing_players, key=lambda p: player_total_passes.get(p, 0), reverse=True)
+                    avg_passes = np.mean(list(player_total_passes.values())) if player_total_passes else 0
+                    
+                    for i, player in enumerate(sorted_missing):
+                        pass_cnt = player_total_passes.get(player, 0)
+                        # 根据传球次数推断大致位置
+                        if pass_cnt > avg_passes * 1.2:
+                            pos = 'MF'  # 传球多→中场
+                        elif pass_cnt < avg_passes * 0.5:
+                            pos = 'FW'  # 传球少→前锋
+                        else:
+                            pos = 'MF'  # 中等→中场偏前
+                        
+                        # 分配坐标
+                        if pos == 'MF':
+                            base_x = 65 + np.random.uniform(-8, 8)
+                        else:  # FW
+                            base_x = 95 + np.random.uniform(-5, 5)
+                        
+                        # y坐标均匀分布
+                        y_pos = 25 + (50 * i / max(len(sorted_missing) - 1, 1))
+                        
+                        player_coords[player] = {
+                            'x': base_x,
+                            'y': y_pos,
+                            'position': pos
+                        }
+            
+            # 构建传球对数据
+            pass_pairs = {}
+            if all(col in team_pn.columns for col in ['from_player', 'to_player', 'passes']):
+                for _, row in team_pn.iterrows():
+                    p_from = row['from_player']
+                    p_to = row['to_player']
+                    cnt = int(row['passes'])
+                    # 跳过自传球
+                    if p_from == p_to:
+                        continue
+                    # 规范化球员名（匹配姓或全名）
+                    p_from_key = _match_player_key(p_from, player_coords)
+                    p_to_key = _match_player_key(p_to, player_coords)
+                    if p_from_key and p_to_key and p_from_key != p_to_key:
+                        pair = (p_from_key, p_to_key)
+                        pass_pairs[pair] = pass_pairs.get(pair, 0) + cnt
+            
+            # 画连线（先画连线，再画节点，节点在上层）
+            if pass_pairs:
+                max_cnt = max(pass_pairs.values()) if pass_pairs else 1
+                for (p1, p2), cnt in pass_pairs.items():
+                    if cnt < min_passes:
+                        continue
+                    if p1 in player_coords and p2 in player_coords:
+                        x1, y1 = player_coords[p1]['x'], player_coords[p1]['y']
+                        x2, y2 = player_coords[p2]['x'], player_coords[p2]['y']
+                        # 线宽随传球次数变化
+                        lw = 0.8 + (cnt / max_cnt) * 4.5
+                        # 透明度随传球次数变化（半透明避免冲突）
+                        alpha = 0.15 + (cnt / max_cnt) * 0.45
+                        ax.plot([x1, x2], [y1, y2], color=color, lw=lw, alpha=alpha, zorder=2)
+            
+            # 画球员节点
+            if player_coords:
+                max_passes = max(player_total_passes.values()) if player_total_passes else 1
+                for player, pos_info in player_coords.items():
+                    # 计算节点大小（基于总传球次数）
+                    pass_cnt = player_total_passes.get(player, 0)
+                    size = 60 + (pass_cnt / max(max_passes, 1)) * 200
+                    ax.scatter(pos_info['x'], pos_info['y'], s=size, c=color, 
+                              edgecolors='white', linewidths=0.8, zorder=4, alpha=0.9)
+                    # 球员名（姓氏）
+                    short_name = player.split()[-1] if ' ' in str(player) else str(player)
+                    ax.annotate(short_name, (pos_info['x'], pos_info['y']),
+                               textcoords="offset points", xytext=(0, 10),
+                               fontsize=7.5, ha='center', color=TEXT_COLOR, 
+                               fontweight='bold', alpha=0.9, zorder=5)
+            
+            # ---- TOP5移到球场右侧（球场外）----
+            pass_leaders = sorted(player_total_passes.items(), key=lambda x: x[1], reverse=True)[:5]
+            if pass_leaders:
+                # 在球场右侧画TOP5面板
+                panel_x = 128  # 球场右侧外
+                panel_y_top = 75
+                
+                ax.text(panel_x, panel_y_top, '传球TOP5', ha='left', 
+                       fontsize=10, color=color, fontweight='bold')
+                
+                for i, (player, cnt) in enumerate(pass_leaders):
+                    short_name = player.split()[-1] if ' ' in str(player) else str(player)
+                    y_pos = panel_y_top - 8 - i * 8
+                    ax.text(panel_x, y_pos, f'{i+1}. {short_name}: {cnt}次', 
+                           ha='left', fontsize=8, color=TEXT_COLOR)
+                
+                # 调整x轴范围以容纳TOP5面板
+                ax.set_xlim(-5, 155)
+            
+            formation = stats[team].get('formation', 'N/A')
+            acc = stats[team]['pass_accuracy']
+            ax.set_title(f'{team} | {formation}\n传球成功率 {acc:.0f}%',
+                          fontsize=12, color=color, pad=10)
+            continue
+
+        # ===== StatsBomb模式：原有的逐事件传球网络 =====
         if team_passes.empty:
             # 尝试从stats和球员排行展示
             pass_leaders = stats[team].get('pass_leaders', pd.Series(dtype=int))
@@ -360,13 +494,14 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
                 ax.set_title(f'{team} | {formation}\n传球成功率 {acc:.0f}%',
                               fontsize=12, color=color, pad=10)
                 
-                # 展示传球TOP5球员（文字形式）
-                y_pos = 65
-                ax.text(60, 75, '传球TOP5', ha='center', fontsize=11, color=color, fontweight='bold')
+                # TOP5移到右侧
+                panel_x = 128
+                ax.text(panel_x, 75, '传球TOP5', ha='left', fontsize=11, color=color, fontweight='bold')
                 for i, (player, cnt) in enumerate(pass_leaders.head(5).items()):
                     short_name = player.split()[-1] if ' ' in str(player) else str(player)
-                    ax.text(60, y_pos - i * 8, f'{i+1}. {short_name}: {cnt}次', 
-                            ha='center', fontsize=9, color=TEXT_COLOR)
+                    ax.text(panel_x, 65 - i * 8, f'{i+1}. {short_name}: {cnt}次', 
+                            ha='left', fontsize=9, color=TEXT_COLOR)
+                ax.set_xlim(-5, 155)
             else:
                 ax.set_title(f'{team}\n（无传球数据）', fontsize=12, color=color, pad=10)
             continue
@@ -430,6 +565,107 @@ def draw_pass_network(df, info, stats, output_path=None, min_passes=3):
         return output_path
 
     return fig
+
+
+def _assign_player_positions(team, lineups_df, player_pass_counts=None):
+    """根据球员位置（GK/DF/MF/FW）分配球场上的坐标，形成分层布局
+    
+    返回: {player_name: {'x': x, 'y': y, 'position': pos}}
+    """
+    if lineups_df is None or lineups_df.empty:
+        return {}
+    
+    # 筛选该队首发球员
+    team_lineup = lineups_df[lineups_df['team'] == team].copy()
+    if team_lineup.empty:
+        return {}
+    
+    # 按位置分组
+    groups = {'GK': [], 'DF': [], 'MF': [], 'FW': []}
+    for _, row in team_lineup.iterrows():
+        pos = str(row.get('position', '')).strip().upper()
+        # 映射常见位置缩写
+        if pos in ['GK', 'GL', 'GOALKEEPER']:
+            groups['GK'].append(row)
+        elif pos in ['DF', 'DEF', 'DEFENDER', 'LB', 'RB', 'CB', 'LWB', 'RWB']:
+            groups['DF'].append(row)
+        elif pos in ['MF', 'MID', 'MIDFIELDER', 'CM', 'DM', 'AM', 'LM', 'RM']:
+            groups['MF'].append(row)
+        elif pos in ['FW', 'FWD', 'FORWARD', 'ST', 'CF', 'LW', 'RW', 'SS']:
+            groups['FW'].append(row)
+        else:
+            # 未知位置默认放中场
+            groups['MF'].append(row)
+    
+    # 各位置的基准x坐标（从左到右：本方半场到对方半场）
+    pos_x = {'GK': 15, 'DF': 35, 'MF': 60, 'FW': 90}
+    
+    # 为每组球员分配y坐标（均匀分布）
+    result = {}
+    for pos_key, players in groups.items():
+        if not players:
+            continue
+        n = len(players)
+        base_x = pos_x[pos_key]
+        
+        # y方向分布范围
+        if pos_key == 'GK':
+            y_min, y_max = 35, 45  # 门将在中间
+        elif pos_key == 'DF':
+            y_min, y_max = 15, 65
+        elif pos_key == 'MF':
+            y_min, y_max = 10, 70
+        else:  # FW
+            y_min, y_max = 20, 60
+        
+        for i, row in enumerate(players):
+            player_name = row.get('player_name', '')
+            if n == 1:
+                y = (y_min + y_max) / 2
+            else:
+                y = y_min + (y_max - y_min) * i / (n - 1)
+            
+            # x方向加一点随机偏移，避免重叠
+            x_jitter = np.random.uniform(-5, 5) if pos_key != 'GK' else 0
+            y_jitter = np.random.uniform(-2, 2)
+            
+            result[player_name] = {
+                'x': base_x + x_jitter,
+                'y': y + y_jitter,
+                'position': pos_key
+            }
+    
+    return result
+
+
+def _match_player_key(name, player_coords):
+    """在player_coords的键中匹配球员名
+    
+    匹配规则：全名匹配 > 姓氏匹配 > 名字中包含
+    """
+    if not name or not player_coords:
+        return None
+    
+    # 全名匹配
+    if name in player_coords:
+        return name
+    
+    # 姓氏匹配（取最后一个单词）
+    last_name = name.split()[-1] if ' ' in str(name) else name
+    last_name_lower = last_name.lower()
+    
+    # 先尝试精确姓氏匹配
+    for key in player_coords:
+        key_last = key.split()[-1] if ' ' in key else key
+        if key_last.lower() == last_name_lower:
+            return key
+    
+    # 再尝试包含匹配
+    for key in player_coords:
+        if last_name_lower in key.lower() or key.lower() in name.lower():
+            return key
+    
+    return None
 
 
 # ========== 射门对比 ==========
@@ -957,16 +1193,16 @@ def draw_tactical_radar(df, info, stats, output_path=None):
     # 绘制防守雷达
     _draw_radar(ax_defense, defense_dims, t1_defense, t2_defense, '防守端', '🛡')
     
-    # 统一图例（放在两图中间上方）
+    # 统一图例（放在两图中间上方，标题下方）
     handles, labels = ax_attack.get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', ncol=2, 
-              frameon=False, fontsize=13, bbox_to_anchor=(0.5, 0.98),
+              frameon=False, fontsize=13, bbox_to_anchor=(0.5, 0.93),
               labelcolor=TEXT_COLOR)
     
-    # 总标题
-    fig.suptitle('战术风格雷达图', fontsize=18, color=TEXT_COLOR, y=0.97, fontweight='bold')
+    # 总标题（移到最上方，与图例错开）
+    fig.suptitle('战术风格雷达图', fontsize=18, color=TEXT_COLOR, y=0.98, fontweight='bold')
     
-    plt.tight_layout(rect=[0, 0, 1, 0.92])
+    plt.tight_layout(rect=[0, 0, 1, 0.89])
     
     if output_path:
         fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
@@ -1144,7 +1380,7 @@ def draw_cross_tactics(df, info, stats, output_path=None):
     cn_names = cross_data[t1].get('type_names_cn', {})
     cross_type_colors = ['#00f5c4', '#4da6ff', '#f0883e', '#a78bfa', '#34d399', '#fbbf24']
     
-    fig = plt.figure(figsize=(16, 10))
+    fig = plt.figure(figsize=(16, 9))
     fig.patch.set_facecolor(BG_COLOR)
     
     # 左侧饼图：T1
@@ -1159,18 +1395,20 @@ def draw_cross_tactics(df, info, stats, output_path=None):
         labels1, vals1, colors1 = zip(*t1_nonzero)
         wedges1, texts1, autotexts1 = ax1.pie(
             vals1, labels=labels1, colors=colors1, autopct='%1.0f%%',
-            startangle=90, textprops={'color': TEXT_COLOR, 'fontsize': 9},
-            pctdistance=0.75, wedgeprops={'edgecolor': BG_COLOR, 'linewidth': 2}
+            startangle=90, textprops={'color': TEXT_COLOR, 'fontsize': 11},
+            pctdistance=0.72, wedgeprops={'edgecolor': BG_COLOR, 'linewidth': 2},
+            labeldistance=1.15
         )
         for at in autotexts1:
-            at.set_fontsize(8)
+            at.set_fontsize(12)
             at.set_fontweight('bold')
+            at.set_color('white')
     else:
         ax1.text(0.5, 0.5, '无类型数据', ha='center', va='center', color=LINE_COLOR, fontsize=12)
     
-    ax1.set_title(f'{t1}\n传中类型分布', fontsize=12, color=TEAM1_COLOR, pad=10)
+    ax1.set_title(f'{t1}\n传中类型分布', fontsize=13, color=TEAM1_COLOR, pad=15)
     
-    # 右侧饼图：T2
+    # 中间饼图：T2
     ax2 = fig.add_subplot(1, 3, 2)
     t2_types = cross_data[t2]['type_distribution']
     t2_vals = [t2_types.get(ct, 0) for ct in cross_types_en]
@@ -1180,16 +1418,18 @@ def draw_cross_tactics(df, info, stats, output_path=None):
         labels2, vals2, colors2 = zip(*t2_nonzero)
         wedges2, texts2, autotexts2 = ax2.pie(
             vals2, labels=labels2, colors=colors2, autopct='%1.0f%%',
-            startangle=90, textprops={'color': TEXT_COLOR, 'fontsize': 9},
-            pctdistance=0.75, wedgeprops={'edgecolor': BG_COLOR, 'linewidth': 2}
+            startangle=90, textprops={'color': TEXT_COLOR, 'fontsize': 11},
+            pctdistance=0.72, wedgeprops={'edgecolor': BG_COLOR, 'linewidth': 2},
+            labeldistance=1.15
         )
         for at in autotexts2:
-            at.set_fontsize(8)
+            at.set_fontsize(12)
             at.set_fontweight('bold')
+            at.set_color('white')
     else:
         ax2.text(0.5, 0.5, '无类型数据', ha='center', va='center', color=LINE_COLOR, fontsize=12)
     
-    ax2.set_title(f'{t2}\n传中类型分布', fontsize=12, color=TEAM2_COLOR, pad=10)
+    ax2.set_title(f'{t2}\n传中类型分布', fontsize=13, color=TEAM2_COLOR, pad=15)
     
     # 右侧：传中成功率对比
     ax3 = fig.add_subplot(1, 3, 3)
@@ -1265,10 +1505,11 @@ def draw_physical_zones(df, info, stats, output_path=None):
     if t1 not in phys_data or t2 not in phys_data:
         return None
     
-    # 五分区
+    # 五分区（高区分度渐变色：深灰→蓝→青→橙→红）
     zone_keys = ['zone1_walk', 'zone2_jog', 'zone3_run', 'zone4_low_sprint', 'zone5_high_sprint']
     cn_names = phys_data[t1].get('zone_names_cn', {})
-    zone_colors = ['#6b7280', '#3b82f6', '#22c55e', '#f59e0b', '#ef4444']
+    # 从冷到暖的高区分度渐变色系
+    zone_colors = ['#4b5563', '#3b82f6', '#06b6d4', '#f97316', '#dc2626']
     
     fig = plt.figure(figsize=(16, 10))
     fig.patch.set_facecolor(BG_COLOR)
@@ -1339,8 +1580,18 @@ def draw_physical_zones(df, info, stats, output_path=None):
     x_sprint = np.arange(len(sprint_metrics))
     width = 0.3
     
-    ax2.bar(x_sprint - width/2, t1_sprint_vals, width, label=t1, color=TEAM1_COLOR, alpha=0.85)
-    ax2.bar(x_sprint + width/2, t2_sprint_vals, width, label=t2, color=TEAM2_COLOR, alpha=0.85)
+    # 柱状图颜色与分区色系呼应：冲刺用暖色系，高速跑用冷色系，两队有明确对比
+    # 队1：冲刺橙，高速跑青；队2：冲刺红，高速跑蓝
+    t1_sprint_colors = ['#f97316', '#06b6d4']
+    t2_sprint_colors = ['#dc2626', '#3b82f6']
+    
+    for i in range(len(sprint_metrics)):
+        ax2.bar(x_sprint[i] - width/2, t1_sprint_vals[i], width, 
+               color=t1_sprint_colors[i], alpha=0.85, 
+               label=t1 if i == 0 else "")
+        ax2.bar(x_sprint[i] + width/2, t2_sprint_vals[i], width, 
+               color=t2_sprint_colors[i], alpha=0.85,
+               label=t2 if i == 0 else "")
     
     ax2.set_xticks(x_sprint)
     ax2.set_xticklabels(sprint_metrics, fontsize=10)
