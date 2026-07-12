@@ -933,20 +933,34 @@ def load_fifa_from_csv(csv_dir, match_name=None):
     示例：
         df, info, stats = load_fifa_from_csv('/path/to/csv_output/', '加拿大vs摩洛哥')
     """
-    # ---- 步骤1：读取所有CSV文件 ----
+    # ---- 步骤1：读取所有CSV文件（关键词匹配，兼容有无编号前缀） ----
+    # 先扫描目录中的所有CSV文件
+    all_csvs = []
+    if os.path.isdir(csv_dir):
+        all_csvs = [f for f in os.listdir(csv_dir) if f.lower().endswith('.csv')]
+    
+    def _find_csv(keyword):
+        """在目录中找包含指定关键词的CSV文件（不区分大小写）"""
+        kw = keyword.lower()
+        for fname in all_csvs:
+            if kw in fname.lower():
+                return os.path.join(csv_dir, fname)
+        # 兜底：尝试标准带编号文件名
+        return os.path.join(csv_dir, f'XX_{keyword}.csv')
+    
     csv_files = {
-        'match_info': os.path.join(csv_dir, '01_match_info.csv'),
-        'lineups': os.path.join(csv_dir, '02_lineups.csv'),
-        'key_stats': os.path.join(csv_dir, '03_key_stats.csv'),
-        'phases': os.path.join(csv_dir, '04_phases_of_play.csv'),
-        'attempts': os.path.join(csv_dir, '05_attempts_at_goal.csv'),
-        'crosses': os.path.join(csv_dir, '06_crosses.csv'),
-        'offers': os.path.join(csv_dir, '07_offers_to_receive.csv'),
-        'possession_dist': os.path.join(csv_dir, '08_in_possession_distributions.csv'),
-        'possession_offers': os.path.join(csv_dir, '09_in_possession_offers.csv'),
-        'defense': os.path.join(csv_dir, '10_out_of_possession.csv'),
-        'physical': os.path.join(csv_dir, '11_physical_data.csv'),
-        'passing_network': os.path.join(csv_dir, '12_passing_network.csv'),
+        'match_info': _find_csv('match_info'),
+        'lineups': _find_csv('lineups'),
+        'key_stats': _find_csv('key_stats'),
+        'phases': _find_csv('phases_of_play'),
+        'attempts': _find_csv('attempts_at_goal'),
+        'crosses': _find_csv('crosses'),
+        'offers': _find_csv('offers_to_receive'),
+        'possession_dist': _find_csv('in_possession_distributions'),
+        'possession_offers': _find_csv('in_possession_offers'),
+        'defense': _find_csv('out_of_possession'),
+        'physical': _find_csv('physical_data'),
+        'passing_network': _find_csv('passing_network'),
     }
     
     data = {}
@@ -1731,13 +1745,85 @@ def generate_tactical_insights(stats, info=None):
 
 # ========== 便捷函数 ==========
 
+# FIFA比赛报告特征文件名关键词（用于智能识别FIFA多文件格式）
+FIFA_FILE_KEYWORDS = [
+    'match_info',
+    'lineups',
+    'key_stats',
+    'phases_of_play',
+    'attempts_at_goal',
+    'crosses',
+    'offers_to_receive',
+    'in_possession_distributions',
+    'in_possession_offers',
+    'out_of_possession',
+    'physical_data',
+    'passing_network',
+]
+
+# 核心标识文件关键词（至少命中几个才认为是FIFA格式）
+_FIFA_CORE_KEYWORDS = {'match_info', 'attempts_at_goal', 'key_stats'}
+_FIFA_MIN_MATCH = 3  # 至少匹配3个核心关键词
+
+
+def detect_fifa_from_filenames(filenames):
+    """根据文件名列表判断是否为FIFA比赛报告格式（关键词匹配，更鲁棒）
+    
+    参数：
+        filenames: list[str] — 文件名列表（不含路径）
+    
+    返回：
+        bool — True表示识别为FIFA多文件格式
+    
+    识别逻辑：
+        检查文件名中是否包含FIFA特征关键词，至少命中3个核心关键词即判定为FIFA格式。
+        不依赖文件编号前缀（如01_、02_），不依赖大小写，支持各种命名变体。
+    """
+    if not filenames or len(filenames) < 2:
+        return False
+    
+    # 统一转为小写，去掉扩展名，方便匹配
+    names_lower = [os.path.splitext(f.lower())[0] for f in filenames]
+    
+    # 统计命中的核心关键词数量
+    core_hits = 0
+    for kw in _FIFA_CORE_KEYWORDS:
+        if any(kw in name for name in names_lower):
+            core_hits += 1
+    
+    if core_hits >= _FIFA_MIN_MATCH:
+        return True
+    
+    # 退而求其次：统计所有关键词命中数
+    all_hits = 0
+    for kw in FIFA_FILE_KEYWORDS:
+        if any(kw in name for name in names_lower):
+            all_hits += 1
+    
+    # 命中5个以上普通关键词也认为是FIFA格式
+    return all_hits >= 5
+
+
 def is_fifa_csv_dir(csv_dir):
     """判断一个目录是否为FIFA比赛报告CSV输出目录
     
-    检测依据：是否同时存在01_match_info.csv和05_attempts_at_goal.csv
+    使用关键词匹配，比精确文件名匹配更鲁棒，支持：
+    - 带编号前缀（01_match_info.csv）
+    - 不带前缀（match_info.csv）
+    - 大小写不敏感
+    - 不同导出工具的命名变体
+    
+    检测依据：目录中CSV文件的文件名是否包含足够多的FIFA特征关键词。
     """
-    required = ['01_match_info.csv', '05_attempts_at_goal.csv', '03_key_stats.csv']
-    return all(os.path.exists(os.path.join(csv_dir, f)) for f in required)
+    if not os.path.isdir(csv_dir):
+        return False
+    
+    try:
+        csv_files = [f for f in os.listdir(csv_dir) if f.lower().endswith('.csv')]
+    except OSError:
+        return False
+    
+    return detect_fifa_from_filenames(csv_files)
 
 
 def fifa_chart_support(info):
