@@ -110,6 +110,27 @@ def get_page_text(pdf, page_num: int) -> str:
     return clean_text(page.extract_text() or '')
 
 
+def extract_team_name_from_title(lines: List[str], keywords: List[str]) -> str:
+    """从页面标题行中提取队名（移除数据类型关键词）
+    
+    Args:
+        lines: 页面文本行
+        keywords: 数据类型关键词列表，按优先级排序（优先匹配更具体的）
+    
+    Returns:
+        队名字符串，找不到返回空字符串
+    """
+    for line in lines[:8]:  # 只看前8行，标题一般在最上面
+        for kw in keywords:
+            if kw in line:
+                team = line.replace(kw, '').strip()
+                # 清理多余的空格和可能残留的标点
+                team = re.sub(r'^[\s\-—–|]+|[\s\-—–|]+$', '', team)
+                if team:
+                    return team
+    return ''
+
+
 # ============================================================
 # 1. 比赛基本信息
 # ============================================================
@@ -516,13 +537,14 @@ def parse_crosses(pdf, team_a_page: int = 18, team_b_page: int = 19) -> Tuple[Li
     for page_num in [team_a_page, team_b_page]:
         lines = extract_page_lines(pdf, page_num)
 
+        # 从标题行提取队名（移除关键词后剩余部分即为队名）
         team_name = ''
         for line in lines:
-            if 'Crosses' in line:
-                if 'Canada' in line:
-                    team_name = 'Canada'
-                elif 'Morocco' in line:
-                    team_name = 'Morocco'
+            if 'Crosses (Open Play)' in line:
+                team_name = line.replace('Crosses (Open Play)', '').strip()
+                break
+            elif 'Crosses' in line:
+                team_name = line.replace('Crosses', '').strip()
                 break
 
         # 找到表头行
@@ -559,12 +581,13 @@ def parse_offers_to_receive(pdf, team_a_page: int = 20, team_b_page: int = 21) -
     for page_num in [team_a_page, team_b_page]:
         lines = extract_page_lines(pdf, page_num)
 
+        # 从标题行提取队名
         team_name = ''
         second_line = lines[1] if len(lines) > 1 else ''
-        if 'Canada' in second_line:
-            team_name = 'Canada'
-        elif 'Morocco' in second_line:
-            team_name = 'Morocco'
+        for keyword in ['Offering to Receive', 'Offers to Receive']:
+            if keyword in second_line:
+                team_name = second_line.replace(keyword, '').strip()
+                break
 
         # 找到表头行
         header_idx = -1
@@ -609,15 +632,10 @@ def parse_in_possession_distributions(pdf, team_a_page: int = 42, team_b_page: i
     for page_num in [team_a_page, team_b_page]:
         lines = extract_page_lines(pdf, page_num)
 
-        team_name = ''
-        for line in lines:
-            if 'Canada' in line:
-                team_name = 'Canada'
-                break
-            if 'Morocco' in line:
-                team_name = 'Morocco'
-                break
-
+        team_name = extract_team_name_from_title(lines, [
+                        'In Possession - Distributions',
+                        'Distributions',
+        ])
         # 找到数据起始行
         data_start = -1
         for i, line in enumerate(lines):
@@ -659,15 +677,11 @@ def parse_in_possession_offers(pdf, team_a_page: int = 43, team_b_page: int = 45
     for page_num in [team_a_page, team_b_page]:
         lines = extract_page_lines(pdf, page_num)
 
-        team_name = ''
-        for line in lines:
-            if 'Canada' in line:
-                team_name = 'Canada'
-                break
-            if 'Morocco' in line:
-                team_name = 'Morocco'
-                break
-
+        team_name = extract_team_name_from_title(lines, [
+                        'In Possession - Offers & Receptions',
+                        'In Possession - Offers',
+                        'Offers & Receptions',
+        ])
         # 找到数据起始行
         data_start = -1
         for i, line in enumerate(lines):
@@ -713,15 +727,10 @@ def parse_out_of_possession(pdf, team_a_page: int = 47, team_b_page: int = 48) -
     for page_num in [team_a_page, team_b_page]:
         lines = extract_page_lines(pdf, page_num)
 
-        team_name = ''
-        for line in lines:
-            if 'Canada' in line:
-                team_name = 'Canada'
-                break
-            if 'Morocco' in line:
-                team_name = 'Morocco'
-                break
-
+        team_name = extract_team_name_from_title(lines, [
+                        'Out of Possession',
+                        'Defensive Actions',
+        ])
         # 找到数据起始行
         data_start = -1
         for i, line in enumerate(lines):
@@ -787,13 +796,12 @@ def parse_physical_data(pdf, team_a_page: int = 50, team_b_page: int = 51) -> Tu
     for page_num in [team_a_page, team_b_page]:
         page = pdf.pages[page_num - 1]
         chars = page.chars
+        lines = extract_page_lines(pdf, page_num)
 
-        team_name = ''
-        page_text = clean_text(page.extract_text() or '')
-        if 'Canada' in page_text:
-            team_name = 'Canada'
-        elif 'Morocco' in page_text:
-            team_name = 'Morocco'
+        team_name = extract_team_name_from_title(lines, [
+            'Physical Data',
+            'Physical',
+        ])
 
         # 按y坐标分组字符
         chars_by_y = {}
@@ -905,15 +913,10 @@ def parse_passing_network(pdf, team_a_page: int = 12, team_b_page: int = 13) -> 
     for page_num in [team_a_page, team_b_page]:
         lines = extract_page_lines(pdf, page_num)
 
-        team_name = ''
-        for line in lines:
-            if 'Passing Networks' in line:
-                if 'Canada' in line:
-                    team_name = 'Canada'
-                elif 'Morocco' in line:
-                    team_name = 'Morocco'
-                break
-
+        team_name = extract_team_name_from_title(lines, [
+            'Passing Networks',
+            'Passing Network',
+        ])
         # 找到矩阵表头行
         header_idx = -1
         target_players = []
