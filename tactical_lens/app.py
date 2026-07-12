@@ -47,6 +47,15 @@ except ImportError as e:
     except ImportError:
         _PDFPLUMBER_AVAILABLE = False
 
+# 尝试导入PDF报告生成器
+try:
+    from report_generator import generate_pdf_report, get_pdf_filename
+    _HAS_PDF_REPORT = True
+    _PDF_REPORT_ERROR = None
+except ImportError as e:
+    _HAS_PDF_REPORT = False
+    _PDF_REPORT_ERROR = str(e)
+
 
 # ========== 页面配置 ==========
 st.set_page_config(
@@ -621,11 +630,39 @@ if len(teams) >= 2:
 
     # 下载区
     st.subheader("📥 下载报告")
+    
+    # PDF报告（主按钮，最醒目）
+    if _HAS_PDF_REPORT:
+        with st.spinner("正在生成PDF报告..."):
+            try:
+                pdf_filename = get_pdf_filename(teams[0], teams[1]) if len(teams) >= 2 else f"{match_name}_战术分析报告.pdf"
+                pdf_path = os.path.join(temp_dir, pdf_filename)
+                generate_pdf_report(df, info, stats, pdf_path, chart_dir=temp_dir)
+                if os.path.exists(pdf_path):
+                    with open(pdf_path, 'rb') as f:
+                        st.download_button(
+                            "📄 下载PDF战术报告",
+                            data=f.read(),
+                            file_name=pdf_filename,
+                            mime="application/pdf",
+                            use_container_width=True,
+                            type="primary"
+                        )
+                    st.caption("A4格式 · 7页完整报告 · 含所有图表与战术洞察")
+            except Exception as e:
+                st.warning(f"PDF生成失败：{str(e)}")
+    else:
+        st.info("PDF报告功能未启用（缺少reportlab依赖）")
+    
+    st.markdown("---")
+    
+    # 其他格式
+    st.caption("其他格式")
     dl_cols = st.columns(3)
 
     with dl_cols[0]:
         st.download_button(
-            "📄 文字报告 (TXT)",
+            "📝 文字报告 (TXT)",
             data=text_report,
             file_name=f"{match_name}_报告.txt",
             mime="text/plain"
