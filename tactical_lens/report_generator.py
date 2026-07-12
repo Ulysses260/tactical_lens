@@ -343,14 +343,7 @@ class TacticalReportGenerator:
         s = self.styles
         
         # 上方留白
-        story.append(Spacer(1, 25*mm))
-        
-        # Logo / 标识
-        logo_text = Paragraph("■", ParagraphStyle(
-            'logo', fontName=FONT_CN, fontSize=48, alignment=TA_CENTER,
-            textColor=HexColor(ACCENT_COLOR), spaceAfter=5,
-        ))
-        story.append(logo_text)
+        story.append(Spacer(1, 35*mm))
         
         # 主标题
         story.append(Paragraph("比赛战术分析报告", s['title_main']))
@@ -358,7 +351,7 @@ class TacticalReportGenerator:
         # 副标题
         story.append(Paragraph("TACTICAL MATCH ANALYSIS", s['title_sub']))
         
-        story.append(Spacer(1, 15*mm))
+        story.append(Spacer(1, 18*mm))
         
         # 对阵双方 + 比分
         score_text = f"{self.s1.get('goals', 0)}  —  {self.s2.get('goals', 0)}"
