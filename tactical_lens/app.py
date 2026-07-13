@@ -1203,6 +1203,8 @@ if analysis_mode == "球队追踪":
             </table>
         </div>
         """
+        # 去除每行前导空格，避免Markdown把缩进的HTML识别成代码块
+        table_html = '\n'.join(line.lstrip() for line in table_html.split('\n'))
         st.markdown(table_html, unsafe_allow_html=True)
     
     st.caption(f"📊 数据来源：FIFA比赛报告（共 {len(match_data_list)} 场）")
