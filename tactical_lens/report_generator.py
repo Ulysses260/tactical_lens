@@ -1464,8 +1464,8 @@ def generate_team_tracker_report(team_name, overview, trends, match_data_list, o
             ('BOTTOMPADDING', (0,0), (-1,-1), 0),
         ]))
     
-    def make_data_table(data, header_bg="#0f172a", header_fg="#f1f5f9"):
-        tbl = Table(data, hAlign='LEFT')
+    def make_data_table(data, header_bg="#0f172a", header_fg="#f1f5f9", col_widths=None):
+        tbl = Table(data, hAlign='LEFT', colWidths=col_widths)
         tbl.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), HexColor(header_bg)),
             ('TEXTCOLOR', (0,0), (-1,0), HexColor(header_fg)),
@@ -1533,26 +1533,32 @@ def generate_team_tracker_report(team_name, overview, trends, match_data_list, o
     story.append(make_divider())
     story.append(Spacer(1, 16))
     
+    full_w = A4[0] - 100  # 内容区全宽
+    
     story.append(Paragraph("进攻数据", style_h3))
     attack_data = [
         ['指标', '场均值', '总计'],
-        ['预期进球 (xG)', f'{avg_xg:.2f}', f'{overview.get("total_xg", 0):.2f}'],
+        ['预期进球 (xG)', f'{avg_xg:.2f}', f'{overview.get("xg_total", 0):.2f}'],
         ['射门数', f'{avg_shots:.1f}', f'{overview.get("total_shots", 0)}'],
         ['射正数', f'{avg_sot:.1f}', f'{overview.get("total_shots_on_target", 0)}'],
-        ['控球率', f'{avg_possession:.1f}%', '-'],
+        ['控球率', f'{avg_possession:.1f}%' if avg_possession else '-', '-'],
     ]
-    story.append(make_data_table(attack_data))
-    story.append(Spacer(1, 24))
+    attack_tbl = make_data_table(attack_data, col_widths=[full_w*0.5, full_w*0.25, full_w*0.25])
+    story.append(Spacer(1, 6))
+    story.append(attack_tbl)
+    story.append(Spacer(1, 20))
     
     story.append(Paragraph("防守数据", style_h3))
     avg_ga = goals_against / matches_count if matches_count > 0 else 0
     defense_data = [
         ['指标', '场均值', '总计'],
-        ['预期失球 (xGA)', f'{avg_xga:.2f}', f'{overview.get("total_xga", 0):.2f}'],
+        ['预期失球 (xGA)', f'{avg_xga:.2f}', f'{overview.get("xga_total", 0):.2f}'],
         ['失球数', f'{avg_ga:.2f}', f'{goals_against}'],
         ['零封场次', f'{overview.get("clean_sheets", 0)} 场', '-'],
     ]
-    story.append(make_data_table(defense_data))
+    defense_tbl = make_data_table(defense_data, col_widths=[full_w*0.5, full_w*0.25, full_w*0.25])
+    story.append(Spacer(1, 6))
+    story.append(defense_tbl)
     
     story.append(PageBreak())
     
@@ -1608,7 +1614,7 @@ def generate_team_tracker_report(team_name, overview, trends, match_data_list, o
                 f"{r['possession']:.1f}%" if r.get('possession') else '-',
             ])
         
-        tbl = Table(table_data, colWidths=[28, 100, 55, 36, 45, 45, 60])
+        tbl = Table(table_data, colWidths=[full_w*0.06, full_w*0.28, full_w*0.12, full_w*0.08, full_w*0.12, full_w*0.12, full_w*0.22])
         t_style = [
             ('BACKGROUND', (0,0), (-1,0), HexColor("#0f172a")),
             ('TEXTCOLOR', (0,0), (-1,0), HexColor("#f1f5f9")),
