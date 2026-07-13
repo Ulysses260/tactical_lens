@@ -227,6 +227,9 @@ def compute_team_overview(match_data_list, target_team):
     if matches == 0:
         return {}
     
+    # 零封场次
+    clean_sheets = sum(1 for r in results if r['goals_against'] == 0)
+    
     overview = {
         'matches': matches,
         'wins': wins,
@@ -239,6 +242,11 @@ def compute_team_overview(match_data_list, target_team):
         'xg_total': round(xg_total, 2),
         'xga_total': round(xga_total, 2),
         'xg_diff': round(xg_total - xga_total, 2),
+        'avg_xg': round(xg_total / matches, 2) if matches > 0 else 0,
+        'avg_xga': round(xga_total / matches, 2) if matches > 0 else 0,
+        'total_shots': shots_sum,
+        'total_shots_on_target': shots_on_target_sum,
+        'clean_sheets': clean_sheets,
         'avg_possession': round(possession_sum / possession_count, 1) if possession_count > 0 else None,
         'avg_shots': round(shots_sum / matches, 1),
         'avg_shots_on_target': round(shots_on_target_sum / matches, 1),
