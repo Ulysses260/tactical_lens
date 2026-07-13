@@ -1718,6 +1718,245 @@ def draw_physical_zones(df, info, stats, output_path=None):
     return fig
 
 
+# ========== 球队追踪趋势图（深色主题） ==========
+
+# 深色主题配色常量（球队追踪模式专用）
+DARK_BG = '#0f172a'
+DARK_CARD = '#1e293b'
+DARK_PRIMARY = '#0d9488'      # 深青蓝
+DARK_ACCENT = '#f97316'       # 暖砖橙
+DARK_BLUE = '#3b82f6'         # 亮蓝
+DARK_PURPLE = '#a78bfa'       # 淡紫
+DARK_RED = '#ef4444'          # 红色
+DARK_GREEN = '#22c55e'        # 绿色
+DARK_TITLE = '#f1f5f9'        # 标题文字
+DARK_TEXT = '#cbd5e1'          # 正文文字
+DARK_SUBTITLE = '#94a3b8'     # 次级文字
+DARK_GRID = '#1e293b'         # 网格线色（和背景融合）
+DARK_SPINE = '#334155'        # 坐标轴线色
+
+
+def plot_team_trend(trends, match_labels, output_path=None):
+    """趋势折线图（多指标双Y轴）
+    
+    画4条折线：控球率、xG、进球、传球成功率
+    双Y轴：左轴=数值（射门/xG/进球），右轴=百分比（控球率/传球成功率）
+    x轴=每场对手名
+    
+    参数：
+        trends: dict — compute_trends返回的趋势字典
+        match_labels: list[str] — 每场对手名列表
+        output_path: str — 保存路径，None则返回fig
+    
+    返回：
+        str: 文件路径（若指定output_path）或matplotlib Figure
+    """
+    _ensure_font_setup()
+    
+    if not match_labels or len(match_labels) == 0:
+        print("[可视化] 趋势数据为空，跳过")
+        return None
+    
+    x = list(range(len(match_labels)))
+    
+    # 数据提取（处理None值）
+    goals = [v if v is not None else 0 for v in trends.get('goals', [])]
+    xg_vals = [v if v is not None else 0 for v in trends.get('xg', [])]
+    possession = [v if v is not None else None for v in trends.get('possession', [])]
+    pass_acc = [v if v is not None else None for v in trends.get('pass_accuracy', [])]
+    
+    fig, ax1 = plt.subplots(figsize=(12, 7))
+    fig.patch.set_facecolor(DARK_BG)
+    ax1.set_facecolor(DARK_CARD)
+    
+    # 左Y轴：数值型指标
+    ax1.plot(x, goals, color=DARK_ACCENT, linewidth=2.5, marker='o', markersize=7,
+             label='进球', zorder=5)
+    ax1.plot(x, xg_vals, color=DARK_BLUE, linewidth=2.5, marker='s', markersize=6,
+             label='xG', zorder=5)
+    
+    # 数值标注（进球）
+    for i, v in enumerate(goals):
+        if v > 0:
+            ax1.annotate(f'{v}', (x[i], v), textcoords="offset points",
+                        xytext=(0, 10), ha='center', fontsize=9, color=DARK_ACCENT, fontweight='bold')
+    # 数值标注（xG）
+    for i, v in enumerate(xg_vals):
+        if v > 0:
+            ax1.annotate(f'{v:.1f}', (x[i], v), textcoords="offset points",
+                        xytext=(0, -15), ha='center', fontsize=8, color=DARK_BLUE)
+    
+    ax1.set_xlabel('比赛对手', fontsize=10, color=DARK_TEXT)
+    ax1.set_ylabel('进球 / xG', fontsize=10, color=DARK_TEXT)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(match_labels, fontsize=9, color=DARK_TEXT, rotation=30, ha='right')
+    ax1.tick_params(axis='y', colors=DARK_SUBTITLE, labelsize=9)
+    ax1.tick_params(axis='x', colors=DARK_TEXT, labelsize=9)
+    
+    # 右Y轴：百分比型指标
+    ax2 = ax1.twinx()
+    
+    # 处理百分比数据（None值跳过绘制）
+    if any(v is not None for v in possession):
+        poss_clean = [v if v is not None else 0 for v in possession]
+        ax2.plot(x, poss_clean, color=DARK_PRIMARY, linewidth=2, marker='^', markersize=6,
+                label='控球率%', linestyle='--', zorder=4, alpha=0.85)
+    if any(v is not None for v in pass_acc):
+        acc_clean = [v if v is not None else 0 for v in pass_acc]
+        ax2.plot(x, acc_clean, color=DARK_PURPLE, linewidth=2, marker='D', markersize=5,
+                label='传球成功率%', linestyle='-.', zorder=4, alpha=0.85)
+    
+    ax2.set_ylabel('控球率 / 传球成功率 (%)', fontsize=10, color=DARK_TEXT)
+    ax2.tick_params(axis='y', colors=DARK_SUBTITLE, labelsize=9)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['bottom'].set_color(DARK_SPINE)
+    ax2.spines['left'].set_color(DARK_SPINE)
+    ax2.spines['right'].set_color(DARK_SPINE)
+    ax2.set_axisbelow(True)
+    
+    # 合并图例
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left',
+              frameon=True, facecolor=DARK_CARD, edgecolor=DARK_SPINE,
+              fontsize=9, labelcolor=DARK_TEXT)
+    
+    # 标题
+    ax1.set_title('球队趋势追踪', fontsize=16, color=DARK_TITLE, fontweight='bold', pad=15)
+    
+    # 网格和边框
+    ax1.grid(axis='y', alpha=0.3, color=DARK_SPINE, linestyle='--')
+    ax1.set_axisbelow(True)
+    for spine in ['top', 'right']:
+        ax1.spines[spine].set_visible(False)
+    ax1.spines['left'].set_color(DARK_SPINE)
+    ax1.spines['bottom'].set_color(DARK_SPINE)
+    
+    plt.tight_layout()
+    
+    if output_path:
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=DARK_BG)
+        plt.close(fig)
+        print(f"[可视化] 球队趋势折线图 → {output_path}")
+        return output_path
+    
+    return fig
+
+
+def plot_attack_defense_trend(trends, match_labels, output_path=None):
+    """攻防对比趋势图（分组柱状图，深色主题）
+    
+    每场显示：进球vs失球、xG vs xGA
+    一眼看出攻防两端表现
+    
+    参数：
+        trends: dict — compute_trends返回的趋势字典
+        match_labels: list[str] — 每场对手名列表
+        output_path: str — 保存路径，None则返回fig
+    
+    返回：
+        str: 文件路径（若指定output_path）或matplotlib Figure
+    """
+    _ensure_font_setup()
+    
+    if not match_labels or len(match_labels) == 0:
+        print("[可视化] 趋势数据为空，跳过")
+        return None
+    
+    x = np.arange(len(match_labels))
+    
+    goals_for = [v if v is not None else 0 for v in trends.get('goals', [])]
+    goals_against = [v if v is not None else 0 for v in trends.get('goals_against', [])]
+    xg_for = [v if v is not None else 0 for v in trends.get('xg', [])]
+    xg_against = [v if v is not None else 0 for v in trends.get('xga', [])]
+    
+    width = 0.2
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+    fig.patch.set_facecolor(DARK_BG)
+    
+    # ===== 左图：进球 vs 失球 =====
+    ax1.set_facecolor(DARK_CARD)
+    
+    bars1 = ax1.bar(x - width/2, goals_for, width, label='进球', color=DARK_PRIMARY,
+                    alpha=0.9, edgecolor='none', zorder=3)
+    bars2 = ax1.bar(x + width/2, goals_against, width, label='失球', color=DARK_RED,
+                    alpha=0.8, edgecolor='none', zorder=3)
+    
+    # 数值标注
+    for bar in bars1:
+        h = bar.get_height()
+        if h > 0:
+            ax1.text(bar.get_x() + bar.get_width()/2., h + 0.1, f'{h:.0f}',
+                    ha='center', va='bottom', fontsize=9, color=DARK_PRIMARY, fontweight='bold')
+    for bar in bars2:
+        h = bar.get_height()
+        if h > 0:
+            ax1.text(bar.get_x() + bar.get_width()/2., h + 0.1, f'{h:.0f}',
+                    ha='center', va='bottom', fontsize=9, color=DARK_RED, fontweight='bold')
+    
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(match_labels, fontsize=9, color=DARK_TEXT, rotation=30, ha='right')
+    ax1.set_title('进球 vs 失球', fontsize=14, color=DARK_TITLE, fontweight='bold', pad=12)
+    ax1.set_ylabel('数量', fontsize=10, color=DARK_TEXT)
+    ax1.legend(loc='upper right', frameon=True, facecolor=DARK_CARD,
+              edgecolor=DARK_SPINE, fontsize=9, labelcolor=DARK_TEXT)
+    ax1.tick_params(colors=DARK_SUBTITLE, labelsize=9)
+    ax1.grid(axis='y', alpha=0.2, color=DARK_SPINE, linestyle='--')
+    ax1.set_axisbelow(True)
+    for spine in ['top', 'right']:
+        ax1.spines[spine].set_visible(False)
+    ax1.spines['left'].set_color(DARK_SPINE)
+    ax1.spines['bottom'].set_color(DARK_SPINE)
+    
+    # ===== 右图：xG vs xGA =====
+    ax2.set_facecolor(DARK_CARD)
+    
+    bars3 = ax2.bar(x - width/2, xg_for, width, label='xG', color=DARK_BLUE,
+                    alpha=0.9, edgecolor='none', zorder=3)
+    bars4 = ax2.bar(x + width/2, xg_against, width, label='xGA', color=DARK_ACCENT,
+                    alpha=0.8, edgecolor='none', zorder=3)
+    
+    # 数值标注
+    for bar in bars3:
+        h = bar.get_height()
+        if h > 0:
+            ax2.text(bar.get_x() + bar.get_width()/2., h + 0.05, f'{h:.2f}',
+                    ha='center', va='bottom', fontsize=8, color=DARK_BLUE, fontweight='bold')
+    for bar in bars4:
+        h = bar.get_height()
+        if h > 0:
+            ax2.text(bar.get_x() + bar.get_width()/2., h + 0.05, f'{h:.2f}',
+                    ha='center', va='bottom', fontsize=8, color=DARK_ACCENT, fontweight='bold')
+    
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(match_labels, fontsize=9, color=DARK_TEXT, rotation=30, ha='right')
+    ax2.set_title('xG vs xGA（预期进球）', fontsize=14, color=DARK_TITLE, fontweight='bold', pad=12)
+    ax2.set_ylabel('xG', fontsize=10, color=DARK_TEXT)
+    ax2.legend(loc='upper right', frameon=True, facecolor=DARK_CARD,
+              edgecolor=DARK_SPINE, fontsize=9, labelcolor=DARK_TEXT)
+    ax2.tick_params(colors=DARK_SUBTITLE, labelsize=9)
+    ax2.grid(axis='y', alpha=0.2, color=DARK_SPINE, linestyle='--')
+    ax2.set_axisbelow(True)
+    for spine in ['top', 'right']:
+        ax2.spines[spine].set_visible(False)
+    ax2.spines['left'].set_color(DARK_SPINE)
+    ax2.spines['bottom'].set_color(DARK_SPINE)
+    
+    # 总标题
+    fig.suptitle('攻防对比趋势', fontsize=16, color=DARK_TITLE, fontweight='bold', y=1.02)
+    
+    plt.tight_layout()
+    
+    if output_path:
+        fig.savefig(output_path, dpi=120, bbox_inches='tight', facecolor=DARK_BG)
+        plt.close(fig)
+        print(f"[可视化] 攻防对比趋势图 → {output_path}")
+        return output_path
+    
+    return fig
+
+
 # ========== 批量出图 ==========
 def generate_all_charts(df, info, stats, output_dir='./output'):
     """一键生成所有图表，返回 {chart_id: filepath} 字典"""
