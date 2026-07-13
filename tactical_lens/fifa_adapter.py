@@ -957,8 +957,8 @@ def load_fifa_from_csv(csv_dir, match_name=None):
         return None
     
     # 核心文件（缺失则报错）
+    # 注意：match_info不是必须的，队名可以从lineups/key_stats/attempts等文件推断
     CORE_FILES = {
-        'match_info': 'match_info',
         'lineups': 'lineups',
         'key_stats': 'key_stats',
         'attempts': 'attempts_at_goal',
@@ -966,6 +966,7 @@ def load_fifa_from_csv(csv_dir, match_name=None):
     
     # 非核心文件（缺失则跳过对应图表）
     OPTIONAL_FILES = {
+        'match_info': 'match_info',
         'phases': 'phases_of_play',
         'crosses': 'crosses',
         'offers': 'offers_to_receive',
@@ -976,28 +977,11 @@ def load_fifa_from_csv(csv_dir, match_name=None):
         'passing_network': 'passing_network',
     }
     
-    # 检查核心文件
-    missing_core = []
+    # 加载所有文件（核心+非核心统一加载，缺失的为空DataFrame）
+    all_files = {**CORE_FILES, **OPTIONAL_FILES}
     csv_files = {}
-    for key, keyword in CORE_FILES.items():
-        path = _find_csv(keyword)
-        if path is None:
-            missing_core.append(keyword)
-        csv_files[key] = path
-    
-    if missing_core:
-        raise ValueError(
-            f"缺少核心CSV文件，无法进行分析：{', '.join(missing_core)}\n"
-            f"请确保以下文件存在：match_info, lineups, key_stats, attempts_at_goal"
-        )
-    
-    # 加载非核心文件（缺失时为None）
-    missing_optional = []
-    for key, keyword in OPTIONAL_FILES.items():
-        path = _find_csv(keyword)
-        csv_files[key] = path
-        if path is None:
-            missing_optional.append(keyword)
+    for key, keyword in all_files.items():
+        csv_files[key] = _find_csv(keyword)
     
     data = {}
     for key, filepath in csv_files.items():
@@ -1006,18 +990,75 @@ def load_fifa_from_csv(csv_dir, match_name=None):
         else:
             data[key] = pd.DataFrame()
     
+    # 检查：至少需要能推断出球队名的数据
+    # 从有team列的文件中提取队名，按优先级尝试
+    teams = None
+    team_source = None
+    for key in ['lineups', 'attempts', 'defense', 'physical', 'possession_dist']:
+        df = data.get(key, pd.DataFrame())
+        if not df.empty and 'team' in df.columns:
+            unique_teams = df['team'].dropna().unique().tolist()
+            if len(unique_teams) >= 2:
+                teams = unique_teams[:2]
+                team_source = key
+                break
+    
+    # 如果有key_stats但没有team列数据，从key_stats推断（home/away模式）
+    if teams is None and not data['key_stats'].empty:
+        ks_df = data['key_stats']
+        # key_stats通常有home_team/away_team列或home_value/away_value
+        for col in ks_df.columns:
+            if 'home' in col.lower() and 'team' in col.lower():
+                home_team = str(ks_df[col].iloc[0]) if len(ks_df) > 0 else '主队'
+            if 'away' in col.lower() and 'team' in col.lower():
+                away_team = str(ks_df[col].iloc[0]) if len(ks_df) > 0 else '客队'
+        # 如果从列名能判断，尝试命名
+        if 'home_value' in ks_df.columns and 'away_value' in ks_df.columns:
+            teams = ['主队', '客队']
+            team_source = 'key_stats_placeholder'
+    
+    if teams is None or len(teams) < 2:
+        raise ValueError(
+            "无法从文件中识别出两支球队。请确保上传的文件中包含lineups、attempts、key_stats等至少一个能区分两队的文件。"
+        )
+    
+    missing_count = sum(1 for key in CORE_FILES if csv_files[key] is None)
+    if missing_count >= 2:  # 3个核心文件缺2个以上才报错
+        missing_core = [CORE_FILES[k] for k in CORE_FILES if csv_files[k] is None]
+        print(f"[FIFA适配器] 警告：核心文件缺失较多（{', '.join(missing_core)}），部分功能将不可用")
+    
+    missing_optional = [OPTIONAL_FILES[k] for k in OPTIONAL_FILES if csv_files.get(k) is None]
     if missing_optional:
-        print(f"[FIFA适配器] 警告：以下非核心文件缺失，对应图表将跳过：{', '.join(missing_optional)}")
+        print(f"[FIFA适配器] 以下文件缺失，对应图表将跳过：{', '.join(missing_optional)}")
     
     # ---- 步骤2：解析比赛基本信息 ----
     match_info_df = data['match_info']
     info_dict = dict(zip(match_info_df['field'], match_info_df['value'])) \
         if not match_info_df.empty else {}
     
-    home_team = info_dict.get('home_team', '主队')
-    away_team = info_dict.get('away_team', '客队')
+    # 优先用match_info的队名，没有则用前面推断出的teams
+    if info_dict.get('home_team') and info_dict.get('away_team'):
+        home_team = info_dict['home_team']
+        away_team = info_dict['away_team']
+    elif teams and len(teams) >= 2:
+        home_team, away_team = teams[0], teams[1]
+    else:
+        home_team, away_team = '主队', '客队'
+    
+    # 比分优先从match_info取，没有则从key_stats的Goals行取
     home_score = int(info_dict.get('home_score', 0))
     away_score = int(info_dict.get('away_score', 0))
+    
+    # 如果match_info没比分，尝试从key_stats里取
+    if (home_score == 0 and away_score == 0) and not data['key_stats'].empty:
+        ks_df = data['key_stats']
+        goals_row = ks_df[ks_df['stat_name'].astype(str).str.contains('Goal', case=False, na=False)]
+        if not goals_row.empty:
+            try:
+                home_score = int(float(goals_row.iloc[0]['home_value']))
+                away_score = int(float(goals_row.iloc[0]['away_value']))
+            except (ValueError, TypeError, KeyError):
+                pass
     
     if match_name is None:
         match_name = f"{home_team} vs {away_team}"
