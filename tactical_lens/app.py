@@ -1209,6 +1209,96 @@ if analysis_mode == "球队追踪":
     
     st.caption(f"📊 数据来源：FIFA比赛报告（共 {len(match_data_list)} 场）")
     
+    # ========== PDF报告生成（带验证门槛） ==========
+    st.markdown("---")
+    render_section_header("📄", "导出追踪报告", "Export Report")
+    
+    # 初始化session_state
+    if 'tracker_verified' not in st.session_state:
+        st.session_state.tracker_verified = False
+    if 'tracker_math_a' not in st.session_state:
+        import random
+        st.session_state.tracker_math_a = random.randint(12, 49)
+        st.session_state.tracker_math_b = random.randint(13, 48)
+    if 'tracker_show_answer' not in st.session_state:
+        st.session_state.tracker_show_answer = False
+    
+    if not st.session_state.tracker_verified:
+        st.info("📌 球队追踪报告为进阶功能，请完成下方验证后解锁。")
+        
+        a = st.session_state.tracker_math_a
+        b = st.session_state.tracker_math_b
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            user_answer = st.text_input(
+                f"请计算：{a} + {b} = ?",
+                placeholder="输入数字答案",
+                label_visibility="visible",
+                key="tracker_math_input"
+            )
+        with col2:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            if st.button("验证并生成报告", type="primary", use_container_width=True):
+                try:
+                    if int(user_answer) == a + b:
+                        st.session_state.tracker_verified = True
+                        st.rerun()
+                    else:
+                        st.error("❌ 答案不正确，请重新计算。")
+                        # 换一道新题
+                        import random
+                        st.session_state.tracker_math_a = random.randint(12, 49)
+                        st.session_state.tracker_math_b = random.randint(13, 48)
+                except ValueError:
+                    st.error("请输入有效的数字。")
+        
+        st.caption("💡 此为临时验证机制，未来将接入正式付费通道。")
+    
+    else:
+        # 已验证通过，显示PDF生成按钮
+        st.success("✅ 验证通过，可生成球队追踪报告。")
+        
+        if st.button("📄 生成球队追踪PDF报告", type="primary", use_container_width=True):
+            with st.spinner("正在生成PDF报告，请稍候..."):
+                try:
+                    # 延迟导入PDF生成器
+                    from report_generator import generate_team_tracker_report, get_team_tracker_filename
+                    
+                    pdf_filename = get_team_tracker_filename(target_team)
+                    pdf_path = os.path.join(temp_dir, pdf_filename)
+                    
+                    # 收集图表路径
+                    chart_paths = {}
+                    if trend_chart_path and os.path.exists(trend_chart_path):
+                        chart_paths['trend'] = trend_chart_path
+                    if attack_defense_chart_path and os.path.exists(attack_defense_chart_path):
+                        chart_paths['attack_defense'] = attack_defense_chart_path
+                    
+                    # 生成PDF
+                    generate_team_tracker_report(
+                        target_team, overview, trends, match_data_list,
+                        pdf_path, chart_paths=chart_paths
+                    )
+                    
+                    # 读取并提供下载
+                    with open(pdf_path, "rb") as f:
+                        pdf_bytes = f.read()
+                    
+                    st.download_button(
+                        label="⬇️ 下载球队追踪报告",
+                        data=pdf_bytes,
+                        file_name=pdf_filename,
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                    
+                    st.success("✅ 报告生成完成！")
+                    
+                except Exception as e:
+                    st.error(f"PDF生成失败：{str(e)}")
+                    st.caption("请刷新页面重试，或检查数据是否完整。")
+    
     st.stop()
 
 else:
