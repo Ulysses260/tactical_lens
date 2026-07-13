@@ -1410,3 +1410,289 @@ def get_pdf_filename(team1, team2):
         return name.strip()
     
     return f"{clean(team1)}_{clean(team2)}_战术分析报告.pdf"
+
+
+def generate_team_tracker_report(team_name, overview, trends, match_data_list, output_path, chart_paths=None):
+    """
+    生成球队多场追踪PDF报告（5页A4）
+    
+    第1页 - 封面
+    第2页 - 球队总览（战绩、攻防汇总数据）
+    第3页 - 趋势分析（趋势图 + 攻防对比图）
+    第4页 - 比赛记录表（每场比赛详情）
+    第5页 - 总结与洞察
+    """
+    _register_chinese_font()
+    styles = _get_styles()
+    
+    doc = SimpleDocTemplate(output_path, pagesize=A4,
+                           leftMargin=60, rightMargin=60,
+                           topMargin=50, bottomMargin=50)
+    story = []
+    page_count = [0]
+    
+    def on_page(canvas, doc):
+        page_count[0] += 1
+        _page_decorator(canvas, doc)
+        canvas.saveState()
+        canvas.setFont('NotoSansSC', 9)
+        canvas.setFillColor(colors.HexColor("#64748b"))
+        canvas.drawCentredString(A4[0] / 2, 30, f"第 {page_count[0]} 页  ·  战术透镜 · 球队追踪报告")
+        canvas.restoreState()
+    
+    # ========== 第1页：封面 ==========
+    story.append(Spacer(1, 100))
+    
+    # 大标题
+    cover_title = Paragraph(f'<font color="#f1f5f9" size="32"><b>{team_name}</b></font>', styles['CoverTitle'])
+    story.append(cover_title)
+    story.append(Spacer(1, 12))
+    
+    # 副标题
+    matches_count = overview.get('matches', len(match_data_list))
+    cover_sub = Paragraph(f'<font color="#94a3b8" size="16">球队追踪报告 · {matches_count} 场比赛分析</font>', styles['Normal'])
+    story.append(cover_sub)
+    story.append(Spacer(1, 40))
+    
+    # 装饰线
+    story.append(_make_rule())
+    story.append(Spacer(1, 30))
+    
+    # 核心数据快览
+    wins = overview.get('wins', 0)
+    draws = overview.get('draws', 0)
+    losses = overview.get('losses', 0)
+    goals_for = overview.get('goals_for', 0)
+    goals_against = overview.get('goals_against', 0)
+    
+    stats_html = f"""
+    <table width="100%" cellpadding="12" style="border-collapse: collapse;">
+        <tr style="background-color: #0f172a;">
+            <td align="center" style="border: 1px solid #334155;"><font color="#22c55e" size="20"><b>{wins}</b></font><br/><font color="#64748b" size="10">胜</font></td>
+            <td align="center" style="border: 1px solid #334155;"><font color="#eab308" size="20"><b>{draws}</b></font><br/><font color="#64748b" size="10">平</font></td>
+            <td align="center" style="border: 1px solid #334155;"><font color="#ef4444" size="20"><b>{losses}</b></font><br/><font color="#64748b" size="10">负</font></td>
+            <td align="center" style="border: 1px solid #334155;"><font color="#f1f5f9" size="20"><b>{goals_for}:{goals_against}</b></font><br/><font color="#64748b" size="10">得失球</font></td>
+        </tr>
+    </table>
+    """
+    story.append(Table([[Paragraph(stats_html, styles['Normal'])]], style=TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#0f172a")),
+        ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#334155")),
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+    ])))
+    
+    story.append(Spacer(1, 60))
+    story.append(Paragraph('<font color="#475569" size="10">数据来源：FIFA比赛报告  ·  战术透镜生成</font>', styles['Normal']))
+    
+    story.append(PageBreak())
+    
+    # ========== 第2页：球队总览 ==========
+    story.append(_make_section_header("球队总览", "Team Overview"))
+    story.append(Spacer(1, 16))
+    
+    # 进攻数据
+    story.append(_make_subsection_header("进攻数据"))
+    story.append(Spacer(1, 8))
+    
+    avg_xg = overview.get('avg_xg', 0)
+    avg_shots = overview.get('avg_shots', 0)
+    avg_possession = overview.get('avg_possession', 0)
+    avg_sot = overview.get('avg_shots_on_target', 0)
+    
+    attack_data = [
+        ['指标', '场均值', '总计'],
+        ['预期进球 (xG)', f'{avg_xg:.2f}', f'{overview.get("total_xg", 0):.2f}'],
+        ['射门数', f'{avg_shots:.1f}', f'{overview.get("total_shots", 0)}'],
+        ['射正数', f'{avg_sot:.1f}', f'{overview.get("total_shots_on_target", 0)}'],
+        ['控球率', f'{avg_possession:.1f}%', '-'],
+    ]
+    story.append(_make_data_table(attack_data))
+    story.append(Spacer(1, 20))
+    
+    # 防守数据
+    story.append(_make_subsection_header("防守数据"))
+    story.append(Spacer(1, 8))
+    
+    avg_xga = overview.get('avg_xga', 0)
+    avg_goals_against = goals_against / matches_count if matches_count > 0 else 0
+    
+    defense_data = [
+        ['指标', '场均值', '总计'],
+        ['预期失球 (xGA)', f'{avg_xga:.2f}', f'{overview.get("total_xga", 0):.2f}'],
+        ['失球数', f'{avg_goals_against:.2f}', f'{goals_against}'],
+        ['零封场次', f'{overview.get("clean_sheets", 0)} 场', '-'],
+    ]
+    story.append(_make_data_table(defense_data))
+    story.append(Spacer(1, 20))
+    
+    story.append(PageBreak())
+    
+    # ========== 第3页：趋势分析图表 ==========
+    story.append(_make_section_header("趋势分析", "Trend Analysis"))
+    story.append(Spacer(1, 16))
+    
+    if chart_paths:
+        # 趋势图
+        trend_path = chart_paths.get('trend')
+        if trend_path and os.path.exists(trend_path):
+            story.append(_make_subsection_header("攻防表现趋势"))
+            story.append(Spacer(1, 8))
+            img = Image(trend_path, width=450, height=250)
+            story.append(img)
+            story.append(Spacer(1, 16))
+        
+        # 攻防对比图
+        attack_defense_path = chart_paths.get('attack_defense')
+        if attack_defense_path and os.path.exists(attack_defense_path):
+            story.append(_make_subsection_header("进攻vs防守对比"))
+            story.append(Spacer(1, 8))
+            img2 = Image(attack_defense_path, width=450, height=250)
+            story.append(img2)
+    
+    story.append(PageBreak())
+    
+    # ========== 第4页：比赛记录 ==========
+    story.append(_make_section_header("比赛记录", "Match History"))
+    story.append(Spacer(1, 16))
+    
+    results = overview.get('results', [])
+    if results:
+        table_data = [['#', '对手', '比分', '结果', 'xG', 'xGA', '控球率']]
+        for i, r in enumerate(results):
+            result_text = r['result']
+            table_data.append([
+                str(i + 1),
+                r['opponent'],
+                f"{r['goals_for']}-{r['goals_against']}",
+                result_text,
+                f"{r['xg']:.2f}",
+                f"{r['xga']:.2f}",
+                f"{r['possession']:.1f}%" if r.get('possession') else '-',
+            ])
+        
+        # 自定义表格样式，结果带颜色
+        tbl = Table(table_data, colWidths=[30, 90, 55, 40, 45, 45, 55])
+        table_style = [
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0f172a")),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#f1f5f9")),
+            ('FONTNAME', (0,0), (-1,0), 'NotoSansSC-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 9),
+            ('ALIGN', (2,0), (-1,-1), 'CENTER'),
+            ('ALIGN', (0,0), (0,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#334155")),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.HexColor("#0f172a"), colors.HexColor("#1e293b")]),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+        ]
+        
+        # 给结果列上色
+        for i, r in enumerate(results):
+            row_idx = i + 1
+            res = r['result']
+            if res == '胜':
+                table_style.append(('TEXTCOLOR', (3, row_idx), (3, row_idx), colors.HexColor("#22c55e")))
+            elif res == '平':
+                table_style.append(('TEXTCOLOR', (3, row_idx), (3, row_idx), colors.HexColor("#eab308")))
+            elif res == '负':
+                table_style.append(('TEXTCOLOR', (3, row_idx), (3, row_idx), colors.HexColor("#ef4444")))
+        
+        tbl.setStyle(TableStyle(table_style))
+        story.append(tbl)
+    
+    story.append(PageBreak())
+    
+    # ========== 第5页：总结与洞察 ==========
+    story.append(_make_section_header("总结与洞察", "Summary & Insights"))
+    story.append(Spacer(1, 16))
+    
+    # 战绩总结
+    points = wins * 3 + draws
+    win_rate = wins / matches_count * 100 if matches_count > 0 else 0
+    story.append(_make_subsection_header("战绩概览"))
+    story.append(Spacer(1, 8))
+    
+    summary_text = f"""
+    <font color="#cbd5e1" size="11">
+    {team_name} 在追踪的 {matches_count} 场比赛中取得 <b>{wins}胜{draws}平{losses}负</b> 的战绩，
+    积 {points} 分，胜率 <b>{win_rate:.1f}%</b>。
+    进球 {goals_for} 个，失球 {goals_against} 个，净胜球 <b>{goals_for - goals_against}</b> 个。
+    </font>
+    """
+    story.append(Paragraph(summary_text, styles['Normal']))
+    story.append(Spacer(1, 16))
+    
+    # 进攻洞察
+    story.append(_make_subsection_header("进攻端表现"))
+    story.append(Spacer(1, 8))
+    
+    attack_insight = ""
+    if avg_xg >= 2.0:
+        attack_insight += f"进攻火力强劲，场均预期进球 {avg_xg:.2f} 个，属于顶级进攻水平。"
+    elif avg_xg >= 1.5:
+        attack_insight += f"进攻表现良好，场均预期进球 {avg_xg:.2f} 个，处于上游水平。"
+    else:
+        attack_insight += f"进攻效率有待提升，场均预期进球仅 {avg_xg:.2f} 个。"
+    
+    if avg_shots >= 15:
+        attack_insight += f" 场均射门 {avg_shots:.1f} 次，创造机会能力出色。"
+    elif avg_shots >= 10:
+        attack_insight += f" 场均射门 {avg_shots:.1f} 次，创造机会能力中等。"
+    else:
+        attack_insight += f" 场均射门仅 {avg_shots:.1f} 次，需要提升进攻威胁。"
+    
+    story.append(Paragraph(f'<font color="#cbd5e1" size="11">{attack_insight}</font>', styles['Normal']))
+    story.append(Spacer(1, 16))
+    
+    # 防守洞察
+    story.append(_make_subsection_header("防守端表现"))
+    story.append(Spacer(1, 8))
+    
+    defense_insight = ""
+    if avg_xga <= 0.8:
+        defense_insight += f"防守非常稳固，场均预期失球仅 {avg_xga:.2f} 个，属于顶级防守水平。"
+    elif avg_xga <= 1.2:
+        defense_insight += f"防守表现良好，场均预期失球 {avg_xga:.2f} 个，处于上游水平。"
+    else:
+        defense_insight += f"防守端存在隐患，场均预期失球 {avg_xga:.2f} 个，需要加强。"
+    
+    clean_sheets = overview.get("clean_sheets", 0)
+    if clean_sheets > 0:
+        defense_insight += f" 其中 {clean_sheets} 场零封对手。"
+    
+    story.append(Paragraph(f'<font color="#cbd5e1" size="11">{defense_insight}</font>', styles['Normal']))
+    story.append(Spacer(1, 16))
+    
+    # 趋势判断
+    story.append(_make_subsection_header("趋势判断"))
+    story.append(Spacer(1, 8))
+    
+    trend_insight = ""
+    recent_form = overview.get('recent_form', '')
+    if recent_form:
+        trend_insight += f"近期走势：{recent_form}。"
+    else:
+        trend_insight += "建议关注后续比赛以判断长期走势。"
+    
+    story.append(Paragraph(f'<font color="#cbd5e1" size="11">{trend_insight}</font>', styles['Normal']))
+    story.append(Spacer(1, 40))
+    
+    story.append(_make_rule())
+    story.append(Spacer(1, 12))
+    story.append(Paragraph('<font color="#64748b" size="9">* 本报告由战术透镜自动生成，仅供研究参考。数据来源：FIFA比赛报告。</font>', styles['Normal']))
+    
+    # 构建PDF
+    doc.build(story, onFirstPage=on_page, onLaterPages=on_page)
+    return output_path
+
+
+def get_team_tracker_filename(team_name):
+    """生成球队追踪报告文件名"""
+    def clean(name):
+        for ch in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']:
+            name = name.replace(ch, '_')
+        return name.strip()
+    return f"{clean(team_name)}_球队追踪报告.pdf"
