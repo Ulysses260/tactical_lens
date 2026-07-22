@@ -61,6 +61,23 @@ except ImportError as e:
     _HAS_TEAM_TRACKER = False
     _TEAM_TRACKER_ERROR = str(e)
 
+# 尝试导入位置基准对标模块
+try:
+    from position_benchmark import PositionBenchmarkEngine, TeamBenchmarkResult
+    from benchmark_report import InsightGenerator
+    _HAS_BENCHMARK = True
+    _BENCHMARK_IMPORT_ERROR = None
+except ImportError as e:
+    _HAS_BENCHMARK = False
+    _BENCHMARK_IMPORT_ERROR = str(e)
+
+# 尝试导入FIFA基准适配器（依赖fifa_adapter中的新类）
+try:
+    from fifa_adapter import FIFAMatchBenchmarkAdapter
+    _HAS_FIFA_BENCHMARK = True
+except ImportError as e:
+    _HAS_FIFA_BENCHMARK = False
+
 # PDF报告生成器（延迟导入，点击下载时才加载，节省内存）
 _HAS_PDF_REPORT = True  # 假设存在，真正导入失败会在下载时提示
 _PDF_REPORT_ERROR = None
@@ -806,15 +823,20 @@ with st.sidebar:
     with st.expander("📁 项目结构"):
         st.code("""
 tactical_lens/
-├── main.py           入口
-├── app.py            网页版(当前)
-├── data_loader.py    数据加载
-├── fifa_adapter.py   FIFA数据适配器
-├── fifa_pdf_parser.py FIFA PDF解析器
-├── stats_engine.py   统计引擎
-├── visualizer.py     可视化引擎
-├── report_engine.py  报告引擎
-└── templates/        报告模板
+├── main.py                入口
+├── app.py                 网页版(当前)
+├── data_loader.py         数据加载
+├── fifa_adapter.py        FIFA数据适配器
+├── fifa_pdf_parser.py     FIFA PDF解析器
+├── stats_engine.py        统计引擎
+├── visualizer.py          可视化引擎
+├── report_engine.py       报告引擎
+├── position_benchmark.py  位置基准对标引擎
+├── benchmark_report.py    对标报告生成器
+├── position_benchmarks.json 世界杯基准数据
+├── team_tracker.py        球队多场追踪
+├── report_generator.py    PDF报告生成
+└── templates/             报告模板
 """, language=None)
 
     st.divider()
@@ -1518,6 +1540,30 @@ else:
             st.warning(f"⚠️ 报告生成异常：{e}")
             text_report = f"报告生成异常：{e}"
 
+        # 6. 世界杯基准对标分析（仅FIFA数据可用时）
+        benchmark_results = {}  # {team_name: TeamBenchmarkResult}
+        benchmark_text_reports = {}  # {team_name: str}
+        if is_fifa_data and _HAS_BENCHMARK and _HAS_FIFA_BENCHMARK:
+            try:
+                bm_adapter = FIFAMatchBenchmarkAdapter(csv_dir)
+                bm_engine = PositionBenchmarkEngine()
+                bm_insight_gen = InsightGenerator(bm_engine)
+                
+                match_analysis = bm_adapter.analyze_match()
+                for team_name, (player_stats, player_positions) in match_analysis.items():
+                    if player_stats:
+                        team_result = bm_engine.compare_team(
+                            team_name,
+                            match_name,
+                            player_stats,
+                            player_positions
+                        )
+                        benchmark_results[team_name] = team_result
+                        benchmark_text_reports[team_name] = bm_insight_gen.generate_team_report(team_result)
+            except Exception as e:
+                # 对标分析失败不影响主流程
+                pass
+
     # ========== 展示结果 ==========
     teams = list(stats.keys())
     if len(teams) >= 2:
@@ -1803,6 +1849,161 @@ else:
                 chart_file = chart_paths.get(chart_id)
                 with phys_cols[idx]:
                     show_chart_with_zoom(chart_file, chart_title)
+
+        # ===== 世界杯基准对标板块 =====
+        if benchmark_results:
+            render_section_header("🏆", "世界杯基准对标", "World Cup Benchmark")
+            st.caption("将球员数据与2026世界杯各位置Top10水准对标，评估绝对水平")
+
+            # 球队综合评分卡片
+            bm_cols = st.columns(2)
+            for i, team in enumerate(teams):
+                team_color = "#0d9488" if i == 0 else "#f97316"
+                br = benchmark_results.get(team)
+                with bm_cols[i]:
+                    if br:
+                        score = br.overall_team_score
+                        # 评分等级
+                        if score >= 85:
+                            grade, grade_color = "S", "#22c55e"
+                        elif score >= 70:
+                            grade, grade_color = "A", "#3b82f6"
+                        elif score >= 55:
+                            grade, grade_color = "B", "#eab308"
+                        elif score >= 40:
+                            grade, grade_color = "C", "#f97316"
+                        else:
+                            grade, grade_color = "D", "#ef4444"
+                        st.markdown(f"""
+                        <div class="data-card" style="text-align:center; border-top: 3px solid {team_color};">
+                            <div class="data-card-label">{team}</div>
+                            <div style="font-size: 3rem; font-weight: 800; color: {grade_color}; line-height: 1;">{grade}</div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #f1f5f9; margin-top: 0.25rem;">{score:.1f}<span style="font-size: 0.9rem; color: #64748b;">/100</span></div>
+                            <div class="data-card-sub">世界杯基准综合评分</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div class="data-card" style="text-align:center;">
+                            <div class="data-card-label">{team}</div>
+                            <div class="data-card-value" style="font-size: 1rem; color: #64748b;">数据不足</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+            # 各位置评分对比
+            st.markdown("")
+            bm_pos_cols = st.columns(2)
+            for i, team in enumerate(teams):
+                br = benchmark_results.get(team)
+                team_color = "#0d9488" if i == 0 else "#f97316"
+                with bm_pos_cols[i]:
+                    st.markdown(f"**{team} — 各位置评分**")
+                    if br and br.position_averages:
+                        for pos, score in sorted(br.position_averages.items(), key=lambda x: x[1], reverse=True):
+                            pos_info = bm_engine.positions.get(pos, {})
+                            label = pos_info.get("label", pos)
+                            bar_width = int(score / 100 * 100)
+                            bar_color = "#22c55e" if score >= 85 else "#3b82f6" if score >= 70 else "#eab308" if score >= 55 else "#f97316" if score >= 40 else "#ef4444"
+                            st.markdown(f"""
+                            <div style="display: flex; align-items: center; margin-bottom: 6px;">
+                                <div style="width: 80px; font-size: 0.8rem; color: #94a3b8; flex-shrink: 0;">{label}</div>
+                                <div style="flex: 1; background: #1e293b; border-radius: 4px; height: 18px; overflow: hidden;">
+                                    <div style="width: {bar_width}%; background: {bar_color}; height: 100%; border-radius: 4px; transition: width 0.5s;"></div>
+                                </div>
+                                <div style="width: 50px; text-align: right; font-size: 0.8rem; color: #f1f5f9; font-weight: 600; margin-left: 8px;">{score:.0f}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.info("无位置对标数据")
+
+            # 关键球员对标详情
+            st.markdown("")
+            st.markdown("##### 🔬 关键球员对标详情")
+
+            for i, team in enumerate(teams):
+                br = benchmark_results.get(team)
+                if not br:
+                    continue
+                team_color = "#0d9488" if i == 0 else "#f97316"
+                with st.expander(f"{'🟢' if i == 0 else '🟠'} {team} — 球员对标明细"):
+                    # 按综合分排序展示球员
+                    sorted_players = sorted(
+                        br.player_results.items(),
+                        key=lambda x: x[1].overall_score,
+                        reverse=True
+                    )
+                    for pname, pr in sorted_players:
+                        pos_info = bm_engine.positions.get(pr.position, {})
+                        pos_label = pos_info.get("label", pr.position)
+                        score = pr.overall_score
+                        score_color = "#22c55e" if score >= 85 else "#3b82f6" if score >= 70 else "#eab308" if score >= 55 else "#f97316" if score >= 40 else "#ef4444"
+
+                        st.markdown(f"""
+                        <div style="background: #0f172a; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; border-left: 3px solid {team_color};">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <span style="font-weight: 700; color: #f1f5f9; font-size: 0.95rem;">{pname}</span>
+                                    <span style="color: #64748b; font-size: 0.8rem; margin-left: 8px;">{pos_label}</span>
+                                </div>
+                                <div style="font-weight: 700; color: {score_color}; font-size: 1.1rem;">{score:.1f}</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+                        # 指标对比行
+                        if pr.comparisons:
+                            cols_per_row = min(len(pr.comparisons), 4)
+                            comp_cols = st.columns(cols_per_row)
+                            for ci, comp in enumerate(sorted(pr.comparisons, key=lambda c: c.pct_of_avg, reverse=True)):
+                                with comp_cols[ci % cols_per_row]:
+                                    rating_colors = {
+                                        "elite": "#22c55e", "above": "#3b82f6",
+                                        "average": "#eab308", "below": "#f97316",
+                                        "far_below": "#ef4444"
+                                    }
+                                    rc = rating_colors.get(comp.rating, "#64748b")
+                                    st.markdown(f"""
+                                    <div style="text-align: center; padding: 4px;">
+                                        <div style="font-size: 0.7rem; color: #64748b;">{comp.label}</div>
+                                        <div style="font-size: 0.9rem; font-weight: 600; color: #f1f5f9;">{comp.player_value:.1f}<span style="font-size: 0.7rem; color: #64748b;">{comp.unit}</span></div>
+                                        <div style="font-size: 0.7rem; color: {rc};">基准 {comp.benchmark_avg:.1f} · {comp.rating_cn}</div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+            # 球队总结与训练建议
+            st.markdown("")
+            summary_cols = st.columns(2)
+            for i, team in enumerate(teams):
+                br = benchmark_results.get(team)
+                if not br:
+                    continue
+                with summary_cols[i]:
+                    team_label = f"{'🟢' if i == 0 else '🟠'} {team}"
+                    if br.team_strengths:
+                        st.markdown(f"**{team_label} — 核心优势**")
+                        for s in br.team_strengths[:3]:
+                            st.markdown(f"- ✅ {s}")
+                    if br.team_weaknesses:
+                        st.markdown(f"**{team_label} — 关键短板**")
+                        for w in br.team_weaknesses[:3]:
+                            st.markdown(f"- ⚠️ {w}")
+
+            # 对标报告下载
+            if benchmark_text_reports:
+                st.markdown("")
+                bm_dl_cols = st.columns(2)
+                for i, team in enumerate(teams):
+                    report_text = benchmark_text_reports.get(team, "")
+                    if report_text:
+                        with bm_dl_cols[i]:
+                            st.download_button(
+                                f"📥 {team} 对标报告 (TXT)",
+                                data=report_text,
+                                file_name=f"{team}_世界杯对标报告.txt",
+                                mime="text/plain",
+                                use_container_width=True
+                            )
 
         # ===== 战术洞察板块 =====
         render_section_header("🔍", "战术洞察", "Tactical Insights")
