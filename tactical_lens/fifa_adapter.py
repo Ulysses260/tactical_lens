@@ -28,6 +28,7 @@ fifa_adapter.py — FIFA比赛报告数据适配器
 """
 import os
 import re
+from typing import Dict, List, Tuple, Optional
 import pandas as pd
 import numpy as np
 
@@ -1934,3 +1935,303 @@ def fifa_chart_support(info):
         'physical_zones': ('full', '体能五分区图数据完整（5分区+冲刺+最高速度）'),
     }
     return support
+
+
+# ========== 位置基准对标适配器 ==========
+
+def _classify_detailed_position(player_name: str, fifa_pos: str,
+                                 stats: Dict) -> str:
+    """
+    将FIFA粗分类位置(GK/DF/MF/FW)细化为基准位置(GK/CB/FB/CDM/CM/W/ST)。
+
+    基于球员数据特征判断具体位置：
+    - DF: 高解围+低进攻 → CB, 高推进+低解围 → FB
+    - MF: 高防守+高触球 → CDM, 高进攻 → CM, 高过人+低防守 → W
+    - FW: 高进球 → ST, 高过人+助攻 → W
+    """
+    if fifa_pos == 'GK':
+        return 'GK'
+
+    tackles = stats.get('tackles', 0)
+    clearances = stats.get('clearances', 0)
+    interceptions = stats.get('interceptions', 0)
+    passes = stats.get('passes_attempted', 0)
+    goals = stats.get('goals', 0)
+    assists = stats.get('assists', 0)
+    ball_prog = stats.get('ball_progressions', 0)
+    take_ons = stats.get('take_ons', 0)
+    line_breaks = stats.get('line_breaks_completed', 0)
+
+    # 攻防评分
+    attack_score = goals * 10 + assists * 8 + take_ons * 2 + ball_prog * 1.5
+    defense_score = tackles * 3 + clearances * 2 + interceptions * 3
+
+    if fifa_pos == 'DF':
+        # 边后卫 vs 中卫
+        if attack_score > defense_score * 0.6 and ball_prog > 3:
+            return 'FB'
+        else:
+            return 'CB'
+
+    elif fifa_pos == 'MF':
+        # 后腰 vs 中场 vs 边锋
+        if defense_score > attack_score * 1.5 and passes > 50:
+            return 'CDM'
+        elif take_ons > 5 and (attack_score > defense_score * 2):
+            return 'W'
+        else:
+            return 'CM'
+
+    elif fifa_pos == 'FW':
+        # 前锋 vs 边锋
+        if take_ons > 3 and assists > goals * 0.5:
+            return 'W'
+        else:
+            return 'ST'
+
+    return 'CM'  # 默认
+
+
+class FIFAMatchBenchmarkAdapter:
+    """
+    FIFA比赛数据 → 位置基准对标适配器。
+
+    用法：
+        adapter = FIFAMatchBenchmarkAdapter(csv_dir)
+        result = adapter.analyze_team("Canada")
+        # 或
+        result = adapter.analyze_match()  # 分析双方
+    """
+
+    def __init__(self, csv_dir: str):
+        self.csv_dir = csv_dir
+        self._load_data()
+
+    def _load_data(self):
+        """加载所有12类CSV文件"""
+        d = self.csv_dir
+        self.match_info = _read_csv_safe(os.path.join(d, '01_match_info.csv'))
+        self.lineups = _read_csv_safe(os.path.join(d, '02_lineups.csv'))
+        self.key_stats = _read_csv_safe(os.path.join(d, '03_key_stats.csv'))
+        self.phases = _read_csv_safe(os.path.join(d, '04_phases_of_play.csv'))
+        self.attempts = _read_csv_safe(os.path.join(d, '05_attempts_at_goal.csv'))
+        self.crosses = _read_csv_safe(os.path.join(d, '06_crosses.csv'))
+        self.offers = _read_csv_safe(os.path.join(d, '07_offers_to_receive.csv'))
+        self.in_poss = _read_csv_safe(os.path.join(d, '08_in_possession_distributions.csv'))
+        self.in_poss_offers = _read_csv_safe(os.path.join(d, '09_in_possession_offers.csv'))
+        self.out_poss = _read_csv_safe(os.path.join(d, '10_out_of_possession.csv'))
+        self.physical = _read_csv_safe(os.path.join(d, '11_physical_data.csv'))
+        self.passing_net = _read_csv_safe(os.path.join(d, '12_passing_network.csv'))
+
+    def _get_teams(self) -> List[str]:
+        """获取两队名称"""
+        if not self.lineups.empty:
+            return self.lineups['team'].unique().tolist()[:2]
+        if not self.in_poss.empty:
+            return self.in_poss['team'].unique().tolist()[:2]
+        return []
+
+    def _get_player_positions(self, team: str) -> Dict[str, str]:
+        """从lineups获取球员FIFA位置"""
+        if self.lineups.empty:
+            return {}
+        starters = self.lineups[
+            (self.lineups['team'] == team) &
+            (self.lineups['role'] == 'starting')
+        ]
+        return {
+            row['player_name']: row.get('position', 'MF')
+            for _, row in starters.iterrows()
+            if row.get('player_name')
+        }
+
+    def _extract_player_stats(self, team: str) -> Dict[str, Dict]:
+        """
+        从FIFA CSV提取每个球员的关键数据。
+        返回: {player_name: {stat_key: value, ...}}
+        """
+        players = {}
+
+        # 从控球分布数据获取传球/进攻指标
+        if not self.in_poss.empty:
+            team_data = self.in_poss[self.in_poss['team'] == team]
+            for _, row in team_data.iterrows():
+                name = row.get('player_name', '')
+                if not name:
+                    continue
+                if name not in players:
+                    players[name] = {}
+
+                p = players[name]
+                p['passes_attempted'] = int(row.get('passes_attempted', 0) or 0)
+                p['passes_completed'] = int(row.get('passes_completed', 0) or 0)
+                p['pass_accuracy'] = _parse_pct(row.get('pass_completion_pct')) or 0
+                p['take_ons'] = int(row.get('take_ons', 0) or 0)
+                p['crosses_completed'] = int(row.get('crosses_completed', 0) or 0)
+                p['line_breaks_completed'] = int(row.get('line_breaks_completed', 0) or 0)
+                p['ball_progressions'] = int(row.get('ball_progressions', 0) or 0)
+                p['attempts_at_goal'] = int(row.get('attempts_at_goal', 0) or 0)
+                p['switches_of_play'] = int(row.get('switches_of_play', 0) or 0)
+
+        # 从防守数据获取防守指标
+        if not self.out_poss.empty:
+            team_data = self.out_poss[self.out_poss['team'] == team]
+            for _, row in team_data.iterrows():
+                name = row.get('player_name', '')
+                if not name:
+                    continue
+                if name not in players:
+                    players[name] = {}
+
+                p = players[name]
+                tackles_str = row.get('tackles_made_won', '0/0')
+                tackles_total, tackles_won = _parse_fraction(tackles_str)
+                p['tackles'] = tackles_total or 0
+                p['tackles_won'] = tackles_won or 0
+                p['blocks'] = int(row.get('blocks', 0) or 0)
+                p['interceptions'] = int(row.get('interceptions', 0) or 0)
+                p['clearances'] = int(row.get('clearances', 0) or 0)
+                p['possession_regains'] = int(row.get('possession_regains', 0) or 0)
+                p['pressing_direct'] = int(row.get('pressing_direct', 0) or 0)
+
+                # 触球 ≈ 传球尝试 + 防守动作
+                touches = p.get('passes_attempted', 0) + p['tackles'] + p['clearances']
+                p['touches'] = touches
+
+        # 从射门数据获取进球/助攻
+        if not self.attempts.empty:
+            team_shots = self.attempts[self.attempts['team'] == team]
+            for _, row in team_shots.iterrows():
+                name = row.get('player_name', '')
+                if not name:
+                    continue
+                if name not in players:
+                    players[name] = {'goals': 0, 'shots': 0, 'shots_on_target': 0}
+                p = players[name]
+                p['shots'] = p.get('shots', 0) + 1
+                outcome = str(row.get('outcome', '')).lower()
+                if 'goal' in outcome:
+                    p['goals'] = p.get('goals', 0) + 1
+                elif 'saved' in outcome or ('on target' in outcome and 'goal' not in outcome):
+                    p['shots_on_target'] = p.get('shots_on_target', 0) + 1
+
+        # 计算衍生指标
+        for name, p in players.items():
+            # 射正率
+            shots = p.get('shots', 0)
+            sot = p.get('shots_on_target', 0)
+            p['shots_on_target_pct'] = (sot / shots * 100) if shots > 0 else 0
+
+            # 进球（从射门数据补充）
+            if 'goals' not in p:
+                p['goals'] = 0
+
+            # 防守贡献总数
+            p['defensive_actions'] = (
+                p.get('tackles', 0) + p.get('interceptions', 0) +
+                p.get('blocks', 0) + p.get('clearances', 0)
+            )
+
+        return players
+
+    def _map_to_benchmark_metrics(
+        self, player_stats: Dict[str, Dict], fifa_positions: Dict[str, str]
+    ) -> Tuple[Dict[str, Dict], Dict[str, str]]:
+        """
+        将FIFA数据映射到基准引擎所需的指标格式。
+        同时将FIFA粗分类位置细化为基准位置。
+
+        返回:
+            (benchmark_stats, benchmark_positions)
+        """
+        benchmark_stats = {}
+        benchmark_positions = {}
+
+        for name, raw in player_stats.items():
+            fifa_pos = fifa_positions.get(name, 'MF')
+            detailed_pos = _classify_detailed_position(name, fifa_pos, raw)
+            benchmark_positions[name] = detailed_pos
+
+            bm = {}
+
+            if detailed_pos == 'GK':
+                bm['saves'] = raw.get('clearances', 0)
+                bm['save_pct'] = raw.get('pass_accuracy', 75)
+                bm['clean_sheets'] = 0
+                bm['goals_conceded'] = 0
+
+            elif detailed_pos == 'CB':
+                bm['touches'] = raw.get('touches', 0)
+                bm['tackles'] = raw.get('tackles', 0)
+                bm['clearances'] = raw.get('clearances', 0)
+                bm['interceptions'] = raw.get('interceptions', 0)
+                bm['pass_accuracy'] = raw.get('pass_accuracy', 0)
+
+            elif detailed_pos == 'FB':
+                bm['goals'] = raw.get('goals', 0)
+                bm['assists'] = raw.get('assists', 0)
+                bm['progressive_carries'] = raw.get('ball_progressions', 0)
+                bm['defensive_actions'] = raw.get('defensive_actions', 0)
+                bm['pass_accuracy'] = raw.get('pass_accuracy', 0)
+                tackles_won = raw.get('tackles_won', 0)
+                tackles_total = raw.get('tackles', 0)
+                bm['duel_win_pct'] = (tackles_won / tackles_total * 100) if tackles_total > 0 else 50
+
+            elif detailed_pos == 'CDM':
+                bm['touches'] = raw.get('touches', 0)
+                bm['passes_attempted'] = raw.get('passes_attempted', 0)
+                bm['pass_accuracy'] = raw.get('pass_accuracy', 0)
+                bm['passes_final_third'] = raw.get('line_breaks_completed', 0) + raw.get('ball_progressions', 0)
+                bm['tackles'] = raw.get('tackles', 0)
+                bm['recoveries'] = raw.get('possession_regains', 0)
+
+            elif detailed_pos == 'CM':
+                bm['goals'] = raw.get('goals', 0)
+                bm['assists'] = 0
+                bm['xg'] = 0
+                bm['goals_minus_xg'] = 0
+                bm['key_passes'] = raw.get('line_breaks_completed', 0)
+                bm['pass_accuracy'] = raw.get('pass_accuracy', 0)
+
+            elif detailed_pos == 'W':
+                bm['goals'] = raw.get('goals', 0)
+                bm['assists'] = 0
+                bm['successful_dribbles'] = raw.get('take_ons', 0)
+                bm['progressive_carries_box'] = raw.get('ball_progressions', 0)
+                bm['npxg'] = 0
+                bm['goal_involvements'] = raw.get('goals', 0)
+
+            elif detailed_pos == 'ST':
+                bm['goals'] = raw.get('goals', 0)
+                bm['assists'] = 0
+                bm['xg'] = 0
+                bm['goals_minus_xg'] = 0
+                bm['shots_on_target_pct'] = raw.get('shots_on_target_pct', 0)
+
+            benchmark_stats[name] = bm
+
+        return benchmark_stats, benchmark_positions
+
+    def analyze_team(self, team: str) -> Tuple[Dict[str, Dict], Dict[str, str]]:
+        """
+        分析单支球队，返回可直接输入到BenchmarkEngine的数据。
+
+        Returns:
+            (player_stats, player_positions) - 可直接传给 engine.compare_team()
+        """
+        fifa_positions = self._get_player_positions(team)
+        raw_stats = self._extract_player_stats(team)
+        return self._map_to_benchmark_metrics(raw_stats, fifa_positions)
+
+    def analyze_match(self) -> Dict[str, Tuple[Dict[str, Dict], Dict[str, str]]]:
+        """
+        分析比赛双方。
+
+        Returns:
+            {team_name: (player_stats, player_positions)}
+        """
+        teams = self._get_teams()
+        result = {}
+        for team in teams:
+            result[team] = self.analyze_team(team)
+        return result
