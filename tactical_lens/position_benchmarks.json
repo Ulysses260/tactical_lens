@@ -1,0 +1,527 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "name": "2026 FIFA World Cup Position Benchmarks",
+    "description": "基于2026美加墨世界杯Top10球员数据的各位置评估基准。用于将球队/球员数据与世界杯顶级水准进行对标分析。",
+    "data_sources": [
+      "Squawka",
+      "essential.football",
+      "Striver.Football",
+      "The Athletic",
+      "FIFA Technical Study Reports"
+    ],
+    "created": "2026-07-22",
+    "notes": "大部分数据为赛事累计值（tournament_total）；部分进阶数据为每90分钟值（per_90）。higher_is_better=false 的指标值越低越好。"
+  },
+  "positions": {
+    "GK": {
+      "label": "门将",
+      "label_en": "Goalkeeper",
+      "reference_players": [
+        "Orlando Gill (PAN)", "Gregor Kobel (SUI)", "Eloy Room (Cuw)",
+        "Emiliano Martinez (ARG)", "Diogo Costa (POR)", "Vozinha (CPV)",
+        "Orjan Nyland (NOR)", "Bart Verbruggen (NED)", "Mohammed Al Owais (KSA)",
+        "Yassine Bounou (MAR)"
+      ],
+      "elite_player": "Unai Simon (ESP) - Golden Glove, 7 clean sheets",
+      "benchmarks": {
+        "saves": {
+          "average": 18.3,
+          "elite": 22.0,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "扑救次数"
+        },
+        "save_pct": {
+          "average": 79.0,
+          "elite": 85.0,
+          "unit": "%",
+          "data_type": "rate",
+          "higher_is_better": true,
+          "description": "扑救成功率 (扑救数/面对射门数)"
+        },
+        "clean_sheets": {
+          "average": 1.4,
+          "elite": 3.0,
+          "unit": "场/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "零封场次"
+        },
+        "goals_conceded": {
+          "average": 1.7,
+          "elite": 0.7,
+          "unit": "球/场",
+          "data_type": "per_match",
+          "higher_is_better": false,
+          "description": "场均失球"
+        }
+      },
+      "evaluation": {
+        "weights": {
+          "save_pct": 0.35,
+          "clean_sheets": 0.25,
+          "goals_conceded": 0.20,
+          "saves": 0.10
+        },
+        "style_templates": {
+          "全面型": "Unai Simon - 高零封+高扑救效率",
+          "高效型": "Diogo Costa - 少失球+高扑救率",
+          "稳定型": "Gregor Kobel - 扑救+零封均衡"
+        }
+      }
+    },
+    "CB": {
+      "label": "中卫",
+      "label_en": "Center Back",
+      "reference_players": [
+        "Elliot Anderson (ENG)", "Virgil van Dijk (NED)",
+        "Jan Paul van Hecke (NED)", "Declan Rice (ENG)",
+        "Pau Cubarsi (ESP)", "Aymeric Laporte (ESP)",
+        "Nico Elvedi (SUI)", "Tarik Muharemovic (SVN)",
+        "Brandon Mechele (BEL)", "Dayot Upamecano (FRA)"
+      ],
+      "elite_player": "Elliot Anderson (ENG) - 抢断306+解围656，全能防守怪物",
+      "benchmarks": {
+        "touches": {
+          "average": 2200,
+          "elite": 3000,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "触球次数"
+        },
+        "tackles": {
+          "average": 120,
+          "elite": 200,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "抢断次数"
+        },
+        "clearances": {
+          "average": 180,
+          "elite": 300,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "解围次数"
+        },
+        "interceptions": {
+          "average": 42,
+          "elite": 60,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "拦截次数"
+        },
+        "pass_accuracy": {
+          "average": 87,
+          "elite": 92,
+          "unit": "%",
+          "data_type": "rate",
+          "higher_is_better": true,
+          "description": "传球准确率"
+        }
+      },
+      "evaluation": {
+        "weights": {
+          "clearances": 0.25,
+          "tackles": 0.20,
+          "pass_accuracy": 0.20,
+          "interceptions": 0.15,
+          "touches": 0.10
+        },
+        "style_templates": {
+          "全能防守型": "Anderson/van Dijk - 高触球+高抢断+高解围",
+          "控球出球型": "Cubarsi/Laporte - 高触球+高传球+低抢断"
+        }
+      }
+    },
+    "FB": {
+      "label": "边后卫",
+      "label_en": "Full Back",
+      "reference_players": [
+        "Pedro Porro (ESP)", "Daniel Munoz (COL)",
+        "Alex Freeman (USA)", "Marc Cucurella (ESP)",
+        "Nuno Mendes (POR)", "Luc de Fougerolles (CAN)",
+        "Ramin Rezaeian (IRN)", "Achraf Hakimi (MAR)"
+      ],
+      "elite_player": "Pedro Porro (ESP) - 2球+37防守贡献+3.2 progressive carries/90",
+      "benchmarks": {
+        "goals": {
+          "average": 0.9,
+          "elite": 2.0,
+          "unit": "球/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "进球数"
+        },
+        "assists": {
+          "average": 1.1,
+          "elite": 2.0,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "助攻数"
+        },
+        "progressive_carries": {
+          "average": 5.1,
+          "elite": 8.0,
+          "unit": "次/90分钟",
+          "data_type": "per_90",
+          "higher_is_better": true,
+          "description": "渐进式带球推进"
+        },
+        "defensive_actions": {
+          "average": 27,
+          "elite": 35,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "防守贡献（抢断+拦截+解围）"
+        },
+        "pass_accuracy": {
+          "average": 88,
+          "elite": 92,
+          "unit": "%",
+          "data_type": "rate",
+          "higher_is_better": true,
+          "description": "传球准确率"
+        },
+        "duel_win_pct": {
+          "average": 58,
+          "elite": 70,
+          "unit": "%",
+          "data_type": "rate",
+          "higher_is_better": true,
+          "description": "对抗胜率"
+        }
+      },
+      "evaluation": {
+        "weights": {
+          "progressive_carries": 0.25,
+          "defensive_actions": 0.25,
+          "pass_accuracy": 0.20,
+          "goals": 0.10,
+          "assists": 0.10,
+          "duel_win_pct": 0.10
+        },
+        "style_templates": {
+          "攻守平衡型": "Porro/Hakimi - 高防守贡献+进球助攻",
+          "极致推进型": "Mendes/de Fougerolles - 高progressive carries",
+          "防守稳健型": "Munoz/Freeman - 高抢断率+高传球准确率"
+        }
+      }
+    },
+    "CDM": {
+      "label": "后腰/防守型中场",
+      "label_en": "Defensive Midfielder",
+      "reference_players": [
+        "Rodri (ESP)", "Declan Rice (ENG)",
+        "Ayyoub Bouaddi (FRA)"
+      ],
+      "elite_player": "Rodri (ESP) - 金球奖，五项数据赛事第一（触球910/传球811/完成756/进攻三区204/铲球26）",
+      "benchmarks": {
+        "touches": {
+          "average": 720,
+          "elite": 900,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "触球次数（中场枢纽指标）"
+        },
+        "passes_attempted": {
+          "average": 620,
+          "elite": 800,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "尝试传球数"
+        },
+        "pass_accuracy": {
+          "average": 90,
+          "elite": 93,
+          "unit": "%",
+          "data_type": "rate",
+          "higher_is_better": true,
+          "description": "传球准确率"
+        },
+        "passes_final_third": {
+          "average": 160,
+          "elite": 200,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "进攻三区传球数"
+        },
+        "tackles": {
+          "average": 20,
+          "elite": 26,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "铲球次数"
+        },
+        "recoveries": {
+          "average": 15,
+          "elite": 18,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "断球/夺回球权"
+        }
+      },
+      "evaluation": {
+        "weights": {
+          "pass_accuracy": 0.25,
+          "touches": 0.20,
+          "tackles": 0.15,
+          "passes_final_third": 0.15,
+          "recoveries": 0.15,
+          "passes_attempted": 0.10
+        },
+        "style_templates": {
+          "全能枢纽型": "Rodri - 触球900+/准确率93%+铲球25+（完美模型）",
+          "防守覆盖型": "Rice - 高触球+高抢断+高解围"
+        }
+      }
+    },
+    "CM": {
+      "label": "中场",
+      "label_en": "Central Midfielder",
+      "reference_players": [
+        "Lionel Messi (ARG)", "Jude Bellingham (ENG)",
+        "Johan Manzambi (SUI)", "Ismael Saibari (BEL)",
+        "Pape Gueye (SEN)", "Maxi Araujo (URU)",
+        "Youri Tielemans (BEL)", "Enzo Fernandez (ARG)",
+        "Mikel Merino (ESP)", "Daichi Kamada (JPN)"
+      ],
+      "elite_player": "Lionel Messi (ARG) - 8球4助，xG 4.77，进球-xG +3.23",
+      "benchmarks": {
+        "goals": {
+          "average": 2.8,
+          "elite": 7.0,
+          "unit": "球/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "进球数"
+        },
+        "assists": {
+          "average": 1.0,
+          "elite": 4.0,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "助攻数"
+        },
+        "xg": {
+          "average": 2.0,
+          "elite": 4.5,
+          "unit": "xG/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "预期进球"
+        },
+        "goals_minus_xg": {
+          "average": 1.5,
+          "elite": 3.0,
+          "unit": "球/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "超额进球（进球-xG，终结效率）"
+        },
+        "key_passes": {
+          "average": 12,
+          "elite": 25,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "关键传球"
+        },
+        "pass_accuracy": {
+          "average": 85,
+          "elite": 90,
+          "unit": "%",
+          "data_type": "rate",
+          "higher_is_better": true,
+          "description": "传球准确率"
+        }
+      },
+      "evaluation": {
+        "weights": {
+          "goals": 0.25,
+          "goals_minus_xg": 0.25,
+          "assists": 0.20,
+          "pass_accuracy": 0.15,
+          "key_passes": 0.10,
+          "xg": 0.05
+        },
+        "style_templates": {
+          "超级攻击型": "Messi/Bellingham - 高进球+高超额进球+创造力",
+          "全能中场型": "Enzo/Tielemans - 适度进球+团队配合+防守",
+          "防守中场型": "Gueye/Merino - 适度得分+高强度跑动+拦截"
+        }
+      }
+    },
+    "W": {
+      "label": "边锋",
+      "label_en": "Winger",
+      "reference_players": [
+        "Kylian Mbappe (FRA)", "Lamine Yamal (ESP)",
+        "Bukayo Saka (ENG)", "Brahim Diaz (MAR)",
+        "Ousmane Dembele (FRA)", "Ismailla Sarr (SEN)",
+        "Cody Gakpo (NED)", "Michael Olise (FRA)"
+      ],
+      "elite_player": "Kylian Mbappe (FRA) - 10球4助，28次成功过人，赛事最佳",
+      "benchmarks": {
+        "goals": {
+          "average": 4.0,
+          "elite": 10.0,
+          "unit": "球/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "进球数"
+        },
+        "assists": {
+          "average": 2.3,
+          "elite": 6.0,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "助攻数"
+        },
+        "successful_dribbles": {
+          "average": 17,
+          "elite": 28,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "成功过人次数"
+        },
+        "progressive_carries_box": {
+          "average": 3.8,
+          "elite": 5.1,
+          "unit": "次/90分钟",
+          "data_type": "per_90",
+          "higher_is_better": true,
+          "description": "禁区内渐进式带球"
+        },
+        "npxg": {
+          "average": 3.2,
+          "elite": 6.0,
+          "unit": "xG/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "非点球预期进球"
+        },
+        "goal_involvements": {
+          "average": 6.3,
+          "elite": 14.0,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "进球+助攻总数"
+        }
+      },
+      "evaluation": {
+        "weights": {
+          "goal_involvements": 0.25,
+          "successful_dribbles": 0.20,
+          "progressive_carries_box": 0.20,
+          "assists": 0.15,
+          "npxg": 0.10,
+          "goals": 0.10
+        },
+        "style_templates": {
+          "统治型": "Mbappe - 超高进球+高过人+高助攻",
+          "创造型": "Olise/Brahim - 高助攻+高关键传球",
+          "突破推进型": "Demble/Saka - 高progressive carries+高过人"
+        }
+      }
+    },
+    "ST": {
+      "label": "前锋/中锋",
+      "label_en": "Striker",
+      "reference_players": [
+        "Kylian Mbappe (FRA)", "Lionel Messi (ARG)",
+        "Erling Haaland (NOR)", "Harry Kane (ENG)",
+        "Mikel Oyarzabal (ESP)", "Cristiano Ronaldo (POR)"
+      ],
+      "elite_player": "Kylian Mbappe (FRA) - 10球，xG 5.65，进球-xG +4.35",
+      "benchmarks": {
+        "goals": {
+          "average": 6.0,
+          "elite": 10.0,
+          "unit": "球/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "进球数"
+        },
+        "assists": {
+          "average": 1.8,
+          "elite": 4.0,
+          "unit": "次/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "助攻数"
+        },
+        "xg": {
+          "average": 3.7,
+          "elite": 5.5,
+          "unit": "xG/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "预期进球"
+        },
+        "goals_minus_xg": {
+          "average": 2.1,
+          "elite": 4.0,
+          "unit": "球/赛事",
+          "data_type": "tournament_total",
+          "higher_is_better": true,
+          "description": "超额进球（终结效率核心指标）"
+        },
+        "shots_on_target_pct": {
+          "average": 48,
+          "elite": 60,
+          "unit": "%",
+          "data_type": "rate",
+          "higher_is_better": true,
+          "description": "射正率"
+        }
+      },
+      "evaluation": {
+        "weights": {
+          "goals_minus_xg": 0.30,
+          "goals": 0.30,
+          "xg": 0.15,
+          "assists": 0.10,
+          "shots_on_target_pct": 0.10
+        },
+        "style_templates": {
+          "全能统治型": "Mbappe/Messi - 超高进球+高助攻+正超额进球",
+          "纯射手型": "Haaland - 高进球+高xG+正超额进球",
+          "组织回撤型": "Kane - 适度进球+高助攻+回撤组织"
+        }
+      }
+    }
+  },
+  "best_xi": {
+    "formation": "4-3-3",
+    "players": {
+      "GK": {"name": "Unai Simon", "country": "ESP", "reason": "金手套奖，7场零封"},
+      "RB": {"name": "Pedro Porro", "country": "ESP", "reason": "2球+37防守贡献，冠军主力"},
+      "CB1": {"name": "Pau Cubarsi", "country": "ESP", "reason": "年轻中卫冠军核心"},
+      "CB2": {"name": "Aymeric Laporte", "country": "ESP", "reason": "冠军防线定海神针"},
+      "LB": {"name": "Marc Cucurella", "country": "ESP", "reason": "2.4 xA，防守端出色"},
+      "CDM": {"name": "Rodri", "country": "ESP", "reason": "金球奖，五项数据赛事第一"},
+      "CM1": {"name": "Lionel Messi", "country": "ARG", "reason": "8G+4A，传奇告别演出"},
+      "CM2": {"name": "Jude Bellingham", "country": "ENG", "reason": "7G+1A，最高效中场"},
+      "RW": {"name": "Michael Olise", "country": "FRA", "reason": "6助攻（全运动战），创造力极强"},
+      "LW": {"name": "Kylian Mbappe", "country": "FRA", "reason": "10G+4A，赛事最佳球员"},
+      "ST": {"name": "Erling Haaland", "country": "NOR", "reason": "7G，纯射手代表"}
+    }
+  }
+}
