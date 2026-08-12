@@ -1,10 +1,18 @@
 """
-report_engine.py — 报告引擎
-核心：模板驱动，模板定义"出哪些图、洞察规则、排版顺序"
+report_engine.py — 报告引擎 v2
+核心：模板驱动 + 训练建议映射
+新增：training_recommendations section，每条洞察自动关联训练方案
 """
 import json
 import os
 import datetime
+
+# 导入训练映射（从stats_engine）
+try:
+    from stats_engine import get_training_plan, TRAINING_MAPPING
+    _HAS_TRAINING = True
+except ImportError:
+    _HAS_TRAINING = False
 
 
 # ========== 模板系统 ==========
@@ -32,6 +40,7 @@ class ReportTemplate:
                 {"id": "xg_flow", "type": "chart", "chart_func": "draw_xg_flow", "title": "xG累积曲线", "insight_type": "比赛节奏"},
                 {"id": "possession_timeline", "type": "chart", "chart_func": "draw_possession_timeline", "title": "控球时间线", "insight_type": "比赛节奏"},
                 {"id": "insights", "type": "insights_block", "title": "战术洞察与建议"},
+                {"id": "training_recs", "type": "training_recommendations", "title": "训练建议"},
                 {"id": "footer", "type": "footer"},
             ],
             "insight_rules": {
@@ -41,12 +50,15 @@ class ReportTemplate:
                 "shot_on_target_high": 55,
                 "shot_on_target_low": 30,
                 "foul_diff_threshold": 5,
+                "cross_accuracy_low": 25,
+                "duel_success_low": 40,
+                "big_chance_conversion_low": 40,
             }
         }
     
     @staticmethod
     def concise_template():
-        """精简模板：只出核心图+洞察"""
+        """精简模板：核心图+洞察+训练"""
         return {
             "name": "精简战术报告",
             "sections": [
@@ -55,6 +67,7 @@ class ReportTemplate:
                 {"id": "shot_map", "type": "chart", "chart_func": "draw_shot_map", "title": "射门位置图"},
                 {"id": "pass_network", "type": "chart", "chart_func": "draw_pass_network", "title": "传球网络图"},
                 {"id": "insights", "type": "insights_block", "title": "战术洞察"},
+                {"id": "training_recs", "type": "training_recommendations", "title": "训练重点"},
                 {"id": "footer", "type": "footer"},
             ],
             "insight_rules": {
@@ -103,6 +116,13 @@ def generate_text_report(stats, insights, info, template=None):
                 ('射门(射正)', f"{s1['shots_on_target']}/{s1['shots_total']}", f"{s2['shots_on_target']}/{s2['shots_total']}"),
                 ('进球', str(s1['goals']), str(s2['goals'])),
                 ('xG', f"{s1['xg']:.2f}", f"{s2['xg']:.2f}"),
+                ('大机会(进)', f"{s1.get('big_chances_taken',0)}({s1.get('big_chances_goals',0)})",
+                 f"{s2.get('big_chances_taken',0)}({s2.get('big_chances_goals',0)})"),
+                ('推进传球', str(s1.get('progressive_passes',0)), str(s2.get('progressive_passes',0))),
+                ('传入禁区', str(s1.get('passes_into_box',0)), str(s2.get('passes_into_box',0))),
+                ('传中成功率', f"{s1.get('cross_accuracy',0):.0f}%", f"{s2.get('cross_accuracy',0):.0f}%"),
+                ('对抗成功率', f"{s1.get('duel_success_rate',0):.0f}%", f"{s2.get('duel_success_rate',0):.0f}%"),
+                ('PPDA', f"{s1.get('ppda','N/A')}", f"{s2.get('ppda','N/A')}"),
                 ('关键传球', str(s1['key_passes']), str(s2['key_passes'])),
                 ('角球', str(s1['corners']), str(s2['corners'])),
                 ('犯规', str(s1['fouls']), str(s2['fouls'])),
@@ -125,6 +145,30 @@ def generate_text_report(stats, insights, info, template=None):
                 lines.append(f"  · [{cat}] {text}")
                 if suggestion:
                     lines.append(f"    → 建议：{suggestion}")
+                # v2: 训练建议
+                recs = ins.get('training_recommendations', [])
+                if recs:
+                    for rec in recs:
+                        lines.append(f"    🏋️ 训练：{rec.get('name', '')}（{rec.get('scenario', '')} / {rec.get('zone', '')} / {rec.get('duration', '')}）")
+                        lines.append(f"       重点：{rec.get('focus', '')}")
+
+        elif sec_type == 'training_recommendations':
+            # v2: 独立训练建议板块
+            if _HAS_TRAINING:
+                plan = get_training_plan(insights)
+            else:
+                plan = []
+            if plan:
+                lines.append(f"\n{'='*60}")
+                lines.append(f"  🏋️ {section.get('title', '训练建议')}")
+                lines.append(f"{'='*60}")
+                lines.append(f"  基于本场比赛数据发现，建议以下训练重点：\n")
+                for i, item in enumerate(plan, 1):
+                    lines.append(f"  {i}. {item.get('name', '')} ({item.get('duration', '')})")
+                    lines.append(f"     场景：{item.get('scenario', '')} | 区域：{item.get('zone', '')}")
+                    lines.append(f"     重点：{item.get('focus', '')}")
+                    lines.append(f"     触发：{item.get('triggered_by', '')}")
+                    lines.append("")
         
         elif sec_type == 'footer':
             lines.append(f"\n{'='*60}")
@@ -200,6 +244,13 @@ def generate_html_report(stats, insights, info, chart_paths, template=None, outp
                 ('传球成功率', f"{s1['pass_accuracy']:.1f}%", f"{s2['pass_accuracy']:.1f}%"),
                 ('射门/射正', f"{s1['shots_total']}/{s1['shots_on_target']}", f"{s2['shots_total']}/{s2['shots_on_target']}"),
                 ('xG', f"{s1['xg']:.2f}", f"{s2['xg']:.2f}"),
+                ('大机会(进球)', f"{s1.get('big_chances_taken',0)}({s1.get('big_chances_goals',0)})",
+                 f"{s2.get('big_chances_taken',0)}({s2.get('big_chances_goals',0)})"),
+                ('推进传球', str(s1.get('progressive_passes',0)), str(s2.get('progressive_passes',0))),
+                ('传入禁区', str(s1.get('passes_into_box',0)), str(s2.get('passes_into_box',0))),
+                ('传中成功率', f"{s1.get('cross_accuracy',0):.0f}%", f"{s2.get('cross_accuracy',0):.0f}%"),
+                ('对抗成功率', f"{s1.get('duel_success_rate',0):.0f}%", f"{s2.get('duel_success_rate',0):.0f}%"),
+                ('PPDA', f"{s1.get('ppda','N/A')}", f"{s2.get('ppda','N/A')}"),
                 ('关键传球', str(s1['key_passes']), str(s2['key_passes'])),
                 ('角球', str(s1['corners']), str(s2['corners'])),
                 ('犯规', str(s1['fouls']), str(s2['fouls'])),
@@ -223,10 +274,36 @@ def generate_html_report(stats, insights, info, chart_paths, template=None, outp
                 cat = ins.get('category', '')
                 text = ins.get('text', '')
                 suggestion = ins.get('suggestion', '')
+                recs = ins.get('training_recommendations', [])
                 html_parts.append(f'  <div class="insight">\n    <div class="category">{cat}</div>\n    <div>{text}</div>\n')
                 if suggestion:
                     html_parts.append(f'    <div class="suggestion">→ {suggestion}</div>\n')
+                if recs:
+                    html_parts.append(f'    <div class="training-recs" style="margin-top:8px;padding:8px;background:#1c2128;border-radius:4px;">\n')
+                    html_parts.append(f'      <div style="color:#00f5c4;font-size:12px;font-weight:bold;">🏋️ 推荐训练</div>\n')
+                    for rec in recs:
+                        html_parts.append(f'      <div style="color:#c9d1d9;font-size:13px;margin:2px 0;">• {rec.get("name","")}（{rec.get("scenario","")} / {rec.get("zone","")} / {rec.get("duration","")}）<span style="color:#8b949e">— {rec.get("focus","")}</span></div>\n')
+                    html_parts.append(f'    </div>\n')
                 html_parts.append('  </div>\n')
+
+        elif sec_type == 'training_recommendations':
+            # v2: 独立训练建议板块（HTML）
+            if _HAS_TRAINING:
+                plan = get_training_plan(insights)
+            else:
+                plan = []
+            if plan:
+                html_parts.append(f'  <h2>🏋️ {section.get("title", "训练建议")}</h2>\n')
+                html_parts.append(f'  <div style="background:#161b22;border-radius:8px;padding:20px;margin:10px 0;">\n')
+                html_parts.append(f'    <p style="color:#8b949e;margin-bottom:15px;">基于本场比赛数据发现，建议以下训练重点：</p>\n')
+                for i, item in enumerate(plan, 1):
+                    html_parts.append(f'    <div style="margin:10px 0;padding:12px;background:#0d1117;border-radius:6px;border-left:3px solid #00f5c4;">\n')
+                    html_parts.append(f'      <div style="color:#00f5c4;font-weight:bold;font-size:15px;">{i}. {item.get("name","")} <span style="color:#8b949e;font-weight:normal;">（{item.get("duration","")}）</span></div>\n')
+                    html_parts.append(f'      <div style="color:#c9d1d9;margin:4px 0;">场景：{item.get("scenario","")} | 区域：{item.get("zone","")}</div>\n')
+                    html_parts.append(f'      <div style="color:#c9d1d9;">重点：{item.get("focus","")}</div>\n')
+                    html_parts.append(f'      <div style="color:#8b949e;font-size:12px;margin-top:4px;">数据触发：{item.get("triggered_by","")}</div>\n')
+                    html_parts.append(f'    </div>\n')
+                html_parts.append(f'  </div>\n')
         
         elif sec_type == 'footer':
             html_parts.append(f"""
