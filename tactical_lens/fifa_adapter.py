@@ -2235,3 +2235,616 @@ class FIFAMatchBenchmarkAdapter:
         for team in teams:
             result[team] = self.analyze_team(team)
         return result
+
+
+# ============================================================
+# FIFA 单文件适配（v2）
+# 支持：上传任意一个FIFA CSV即可生成分析报告+训练建议
+# ============================================================
+
+# FIFA文件类型 → 识别列名特征
+_FIFA_FILE_SIGNATURES = {
+    'attempts_at_goal': ['outcome', 'body_part', 'shirt_number', 'player_name', 'time_min'],
+    'key_stats': ['stat_name'],
+    'crosses': ['cross_type', 'outcome', 'shirt_number'],
+    'out_of_possession': ['tackles_made_won', 'interceptions', 'clearances', 'blocks'],
+    'in_possession': ['passes_completed', 'passes_attempted', 'take_ons', 'ball_progressions'],
+    'phases_of_play': ['phase_category', 'phase_name', 'home_pct', 'away_pct'],
+    'physical_data': ['total_distance', 'sprints_count', 'high_speed_runs'],
+    'passing_network': ['player1_name', 'player2_name', 'pass_count'],
+    'offers_to_receive': ['offers_count', 'received_count'],
+    'match_info': ['home_team', 'away_team'],
+    'lineups': ['role', 'position', 'player_name', 'shirt_number'],
+}
+
+
+def detect_fifa_single_file_type(filepath):
+    """根据列名识别单个FIFA CSV文件类型
+    
+    返回：字符串标识（'attempts_at_goal', 'key_stats', ...）或 'unknown'
+    """
+    if not os.path.exists(filepath):
+        return 'unknown'
+    try:
+        df = pd.read_csv(filepath, encoding='utf-8-sig', nrows=3)
+        df.columns = [c.strip().lstrip('\ufeff') for c in df.columns]
+        cols_lower = set(c.lower() for c in df.columns)
+        cols_joined = ' '.join(cols_lower)
+        
+        # 按特征列数量匹配，取最匹配的
+        best_type = 'unknown'
+        best_score = 0
+        
+        for ftype, sig_cols in _FIFA_FILE_SIGNATURES.items():
+            score = sum(1 for sc in sig_cols if any(sc in col for col in cols_joined.split()))
+            if score > best_score and score >= 2:
+                best_score = score
+                best_type = ftype
+        
+        # 特殊判断：射门文件的delivery_type
+        if best_type == 'unknown' and 'team' in cols_lower and 'outcome' in cols_lower:
+            if 'body_part' in cols_lower:
+                best_type = 'attempts_at_goal'
+        
+        return best_type
+    except Exception:
+        return 'unknown'
+
+
+def _estimate_xg_from_outcomes(shots_df):
+    """根据射门结果估算xG（FIFA数据没有xG字段）
+    
+    权重：Goal=0.35, Saved=0.15, Blocked=0.05, OffT=0.05
+    """
+    if shots_df.empty:
+        return 0.0
+    weights = {'goal': 0.35, 'saved': 0.15, 'on target': 0.15, 'blocked': 0.05, 'off t': 0.05, 'off target': 0.05, 'error': 0.05}
+    total_xg = 0.0
+    for outcome in shots_df['outcome'].str.lower():
+        o = str(outcome).strip()
+        matched = False
+        for key, w in weights.items():
+            if key in o:
+                total_xg += w
+                matched = True
+                break
+        if not matched:
+            total_xg += 0.05
+    return round(total_xg, 2)
+
+
+def _map_outcome_to_sb(outcome_str):
+    """FIFA射门结果 → StatsBomb风格"""
+    o = str(outcome_str).strip().lower()
+    if 'goal' in o:
+        return 'Goal'
+    elif 'saved' in o:
+        return 'Saved'
+    elif 'blocked' in o:
+        return 'Blocked'
+    elif 'off target' in o or 'error' in o:
+        return 'Off T'
+    return 'Unknown'
+
+
+def convert_fifa_single_file(filepath, match_name=None):
+    """转换单个FIFA CSV文件为统一格式
+    
+    返回：(df, info, stats)
+      df: 转换后的DataFrame（射门文件会转为事件流格式）
+      info: 比赛信息字典
+      stats: 与compute_match_stats输出兼容的stats字典
+    """
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"找不到文件：{filepath}")
+    
+    raw = pd.read_csv(filepath, encoding='utf-8-sig')
+    raw.columns = [c.strip().lstrip('\ufeff') for c in raw.columns]
+    
+    file_type = detect_fifa_single_file_type(filepath)
+    if match_name is None:
+        match_name = os.path.basename(filepath).replace('.csv', '').replace('_', ' ')
+    
+    teams = raw['team'].dropna().unique().tolist() if 'team' in raw.columns else []
+    if len(teams) < 2 and 'team' in raw.columns:
+        # 某些文件可能只有一队数据
+        teams = raw['team'].dropna().unique().tolist()[:2]
+    
+    info = {
+        'name': match_name,
+        'teams': teams,
+        'source': f'fifa_single ({file_type})',
+        'file': filepath,
+        'fifa_file_type': file_type,
+        'fifa_single_data': True,
+    }
+    
+    # 按文件类型分发处理
+    if file_type == 'attempts_at_goal':
+        df, stats = _convert_attempts(raw, teams, match_name)
+    elif file_type == 'key_stats':
+        df, stats = _convert_key_stats(raw, teams, match_name)
+    elif file_type == 'crosses':
+        df, stats = _convert_crosses(raw, teams, match_name)
+    elif file_type == 'out_of_possession':
+        df, stats = _convert_defense(raw, teams, match_name)
+    elif file_type == 'in_possession':
+        df, stats = _convert_possession(raw, teams, match_name)
+    elif file_type == 'phases_of_play':
+        df, stats = _convert_phases(raw, teams, match_name)
+    elif file_type == 'physical_data':
+        df, stats = _convert_physical(raw, teams, match_name)
+    else:
+        df, stats = _convert_generic(raw, teams, match_name)
+    
+    info['fifa_stats'] = stats
+    return df, info
+
+
+def _init_stats(teams):
+    """初始化空stats字典（兼容stats_engine输出格式）"""
+    stats = {}
+    for team in teams:
+        stats[team] = {
+            'total_events': 0, 'possession_events': 0, 'possession_pct': 50.0,
+            'passes_total': 0, 'passes_completed': 0, 'pass_accuracy': 0,
+            'shots_total': 0, 'shots_on_target': 0, 'shots_off_target': 0,
+            'goals': 0, 'xg': 0.0, 'fouls': 0, 'fouls_won': 0,
+            'corners': 0, 'offsides': 0, 'key_passes': 0, 'assists': 0,
+            'pass_leaders': pd.Series(dtype=int), 'shot_leaders': pd.Series(dtype=int),
+            'xg_leaders': pd.Series(dtype=float), 'formation': 'N/A',
+            'pressure_avg_x': None, 'high_turnovers': 0,
+            'progressive_passes': 0, 'passes_into_final_third': 0,
+            'passes_into_box': 0, 'deep_progressions': 0,
+            'switches_of_play': 0, 'progressive_carries': 0, 'ppda': None,
+            'progressive_sequences': 0, 'defensive_weak_zones': [], 'through_balls': 0,
+            'crosses_total': 0, 'crosses_completed': 0, 'cross_accuracy': 0,
+            'duels_total': 0, 'duels_won': 0, 'duel_success_rate': 0,
+            'offensive_duel_success': 0, 'defensive_duel_success': 0,
+            'aerial_duels_total': 0, 'aerial_success': 0,
+            'counter_press_actions': 0, 'pressures_total': 0, 'pressures_high': 0,
+            'turnover_x_mean': 60, 'turnover_own_third': 0, 'turnover_mid_third': 0,
+            'turnover_final_third': 0, 'recovery_own_third': 0, 'recovery_mid_third': 0,
+            'recovery_final_third': 0, 'high_recoveries': 0,
+            'big_chances_taken': 0, 'big_chances_goals': 0,
+            'shot_techniques': {}, 'shot_body_parts': {},
+        }
+    return stats
+
+
+def _convert_attempts(raw, teams, match_name):
+    """转换05_attempts_at_goal.csv → 事件流 + stats"""
+    stats = _init_stats(teams)
+    events = []
+    
+    for _, row in raw.iterrows():
+        team = str(row.get('team', '')).strip()
+        if team not in stats:
+            continue
+        
+        outcome_raw = str(row.get('outcome', 'Unknown'))
+        outcome_sb = _map_outcome_to_sb(outcome_raw)
+        body_part = str(row.get('body_part', ''))
+        time_min = row.get('time_min', 0)
+        player = str(row.get('player_name', ''))
+        
+        # 构建类StatsBomb事件行
+        events.append({
+            'team': team, 'type': 'Shot',
+            'player': player, 'time_min': time_min,
+            'shot_outcome': outcome_sb,
+            'shot_body_part': body_part,
+            'possession_team': team,
+            'x': None, 'y': None,
+        })
+        
+        s = stats[team]
+        s['shots_total'] += 1
+        s['total_events'] += 1
+        
+        if outcome_sb == 'Goal':
+            s['goals'] += 1
+            s['shots_on_target'] += 1
+        elif outcome_sb == 'Saved':
+            s['shots_on_target'] += 1
+        else:
+            s['shots_off_target'] += 1
+    
+    # 估算xG
+    for team in teams:
+        team_shots = raw[raw['team'] == team]
+        if not team_shots.empty:
+            stats[team]['xg'] = _estimate_xg_from_outcomes(team_shots)
+    
+    # 大机会估算（进球视为大机会转化）
+    for team in teams:
+        s = stats[team]
+        goals = s['goals']
+        # 估算：每个进球约对应2次大机会
+        s['big_chances_taken'] = max(goals * 2, 1) if goals > 0 else 0
+        s['big_chances_goals'] = goals
+    
+    # 射门身体部位分布
+    for team in teams:
+        team_shots = raw[raw['team'] == team]
+        if 'body_part' in team_shots.columns:
+            bp_counts = team_shots['body_part'].value_counts().to_dict()
+            stats[team]['shot_body_parts'] = bp_counts
+    
+    # 射门球员排行
+    for team in teams:
+        team_shots = raw[raw['team'] == team]
+        if not team_shots.empty and 'player_name' in team_shots.columns:
+            stats[team]['shot_leaders'] = team_shots['player_name'].value_counts().head(5)
+    
+    df = pd.DataFrame(events) if events else pd.DataFrame()
+    return df, stats
+
+
+def _convert_key_stats(raw, teams, match_name):
+    """转换03_key_stats.csv → stats"""
+    stats = _init_stats(teams)
+    
+    # key_stats通常是宽表格式：每行一个统计指标，列为home/away值
+    # 或者：team, stat_name, value 格式
+    # 尝试解析常见格式
+    
+    cols = set(c.lower() for c in raw.columns)
+    
+    if 'home_team' in cols and 'away_team' in cols:
+        # 宽表格式
+        home_name = str(raw.iloc[0].get('home_team', teams[0] if teams else 'Home')).strip()
+        away_name = str(raw.iloc[0].get('away_team', teams[1] if len(teams) > 1 else 'Away')).strip()
+        if not teams:
+            teams = [home_name, away_name]
+            stats = _init_stats(teams)
+        
+        for _, row in raw.iterrows():
+            _parse_key_stat_row(row, stats, teams[0], teams[1] if len(teams) > 1 else None, 'home', 'away')
+    elif 'stat_name' in cols or 'statistic' in cols:
+        stat_col = 'stat_name' if 'stat_name' in cols else 'statistic'
+        for _, row in raw.iterrows():
+            stat_name = str(row.get(stat_col, '')).strip().lower()
+            # 尝试从home/away列或value列获取值
+            for i, team in enumerate(teams):
+                val_col = f'home_{team.lower()}' if f'home_{team.lower()}' in cols else None
+                if val_col:
+                    val = row.get(val_col)
+                    _apply_key_stat(stats, team, stat_name, val)
+    else:
+        # 逐行解析所有数值列
+        for _, row in raw.iterrows():
+            for team in teams:
+                for col in raw.columns:
+                    if team.lower() in col.lower():
+                        val = row.get(col)
+                        _apply_key_stat(stats, team, col, val)
+    
+    df = pd.DataFrame()
+    return df, stats
+
+
+def _parse_key_stat_row(row, stats, home, away, home_col_prefix, away_col_prefix):
+    """解析一行key_stats数据"""
+    cols = {c.lower(): c for c in row.index}
+    for col_lower, col_actual in cols.items():
+        val = row[col_actual]
+        if home.lower() in col_lower or 'home' in col_lower:
+            _apply_key_stat(stats, home, col_lower, val)
+        elif away.lower() in col_lower or 'away' in col_lower:
+            if away:
+                _apply_key_stat(stats, away, col_lower, val)
+
+
+def _apply_key_stat(stats, team, stat_name, value):
+    """将单个统计值应用到stats字典"""
+    if team not in stats:
+        return
+    s = stats[team]
+    sn = str(stat_name).lower().strip()
+    
+    try:
+        val = float(value) if pd.notna(value) else 0
+    except (ValueError, TypeError):
+        return
+    
+    if 'possession' in sn and 'pct' in sn or '控球' in sn:
+        s['possession_pct'] = val
+    elif 'pass' in sn and ('accuracy' in sn or 'completion' in sn or '成功率' in sn):
+        s['pass_accuracy'] = val
+    elif 'pass' in sn and ('attempted' in sn or 'total' in sn or '尝试' in sn):
+        s['passes_total'] = max(s['passes_total'], int(val))
+    elif 'pass' in sn and ('completed' in sn or '完成' in sn):
+        s['passes_completed'] = max(s['passes_completed'], int(val))
+    elif 'shot' in sn and ('total' in sn or 'attempt' in sn or '射门' in sn and '正' not in sn):
+        s['shots_total'] = max(s['shots_total'], int(val))
+    elif 'shot' in sn and ('on target' in sn or '射正' in sn):
+        s['shots_on_target'] = max(s['shots_on_target'], int(val))
+    elif 'goal' in sn and 'xg' not in sn:
+        s['goals'] = max(s['goals'], int(val))
+    elif 'xg' in sn or 'expected goal' in sn:
+        s['xg'] = max(s['xg'], val)
+    elif 'foul' in sn:
+        s['fouls'] = max(s['fouls'], int(val))
+    elif 'corner' in sn or '角球' in sn:
+        s['corners'] = max(s['corners'], int(val))
+    elif 'yellow' in sn:
+        s['yellow_cards'] = int(val)
+    elif 'red' in sn:
+        s['red_cards'] = int(val)
+
+
+def _convert_crosses(raw, teams, match_name):
+    """转换06_crosses.csv → stats"""
+    stats = _init_stats(teams)
+    
+    for _, row in raw.iterrows():
+        team = str(row.get('team', '')).strip()
+        if team not in stats:
+            continue
+        s = stats[team]
+        s['crosses_total'] += 1
+        
+        outcome = str(row.get('outcome', '')).lower()
+        if 'success' in outcome or 'complete' in outcome:
+            s['crosses_completed'] += 1
+    
+    for team in teams:
+        s = stats[team]
+        if s['crosses_total'] > 0:
+            s['cross_accuracy'] = s['crosses_completed'] / s['crosses_total'] * 100
+    
+    return pd.DataFrame(), stats
+
+
+def _convert_defense(raw, teams, match_name):
+    """转换10_out_of_possession.csv → stats"""
+    stats = _init_stats(teams)
+    
+    for _, row in raw.iterrows():
+        team = str(row.get('team', '')).strip()
+        if team not in stats:
+            continue
+        s = stats[team]
+        
+        # 解析 "made/won" 格式
+        tackles_str = str(row.get('tackles_made_won', '0/0'))
+        made, won = _parse_fraction(tackles_str)
+        tackles_total = made or 0
+        tackles_won = won or 0
+        
+        s['duels_total'] += tackles_total
+        s['duels_won'] += tackles_won
+        
+        interceptions = int(row.get('interceptions', 0) or 0)
+        blocks = int(row.get('blocks', 0) or 0)
+        clearances = int(row.get('clearances', 0) or 0)
+        presses = int(row.get('pressing_direct', 0) or 0)
+        regains = int(row.get('possession_regains', 0) or 0)
+        
+        s['pressures_total'] += presses
+        s['high_recoveries'] += regains // 3  # 估算前场夺回
+        s['total_events'] += tackles_total + interceptions + blocks + presses
+    
+    for team in teams:
+        s = stats[team]
+        if s['duels_total'] > 0:
+            s['duel_success_rate'] = s['duels_won'] / s['duels_total'] * 100
+    
+    return pd.DataFrame(), stats
+
+
+def _convert_possession(raw, teams, match_name):
+    """转换08_in_possession_distributions.csv → stats"""
+    stats = _init_stats(teams)
+    
+    for _, row in raw.iterrows():
+        team = str(row.get('team', '')).strip()
+        if team not in stats:
+            continue
+        s = stats[team]
+        
+        passes_att = int(row.get('passes_attempted', 0) or 0)
+        passes_comp = int(row.get('passes_completed', 0) or 0)
+        take_ons = int(row.get('take_ons', 0) or 0)
+        line_breaks = int(row.get('line_breaks_completed', 0) or 0)
+        ball_prog = int(row.get('ball_progressions', 0) or 0)
+        crosses_comp = int(row.get('crosses_completed', 0) or 0)
+        crosses_att = int(row.get('crosses_attempted', 0) or 0)
+        switches = int(row.get('switches_of_play', 0) or 0)
+        
+        s['passes_total'] += passes_att
+        s['passes_completed'] += passes_comp
+        s['progressive_passes'] += line_breaks
+        s['passes_into_final_third'] += ball_prog
+        s['switches_of_play'] += switches
+        s['crosses_total'] += crosses_att
+        s['crosses_completed'] += crosses_comp
+        s['progressive_carries'] += take_ons
+        s['total_events'] += passes_att
+    
+    for team in teams:
+        s = stats[team]
+        if s['passes_total'] > 0:
+            s['pass_accuracy'] = s['passes_completed'] / s['passes_total'] * 100
+        if s['crosses_total'] > 0:
+            s['cross_accuracy'] = s['crosses_completed'] / s['crosses_total'] * 100
+    
+    return pd.DataFrame(), stats
+
+
+def _convert_phases(raw, teams, match_name):
+    """转换04_phases_of_play.csv → stats"""
+    stats = _init_stats(teams)
+    # 比赛阶段数据主要影响战术洞察，基础指标无法直接提取
+    return pd.DataFrame(), stats
+
+
+def _convert_physical(raw, teams, match_name):
+    """转换11_physical_data.csv → stats"""
+    stats = _init_stats(teams)
+    # 体能数据不直接影响战术stats，但可以在报告中展示
+    return pd.DataFrame(), stats
+
+
+def _convert_generic(raw, teams, match_name):
+    """通用转换：尝试从任意CSV中提取有用信息"""
+    stats = _init_stats(teams)
+    
+    # 尝试找team列
+    team_col = None
+    for col in raw.columns:
+        if col.lower() == 'team':
+            team_col = col
+            break
+    
+    if team_col is None:
+        return pd.DataFrame(), stats
+    
+    # 遍历所有数值列，尝试推断含义
+    for team in teams:
+        team_data = raw[raw[team_col] == team]
+        s = stats[team]
+        s['total_events'] = len(team_data)
+        
+        for col in team_data.select_dtypes(include=[np.number]).columns:
+            col_lower = col.lower()
+            if 'shot' in col_lower and 'total' in col_lower:
+                s['shots_total'] = max(s['shots_total'], int(team_data[col].sum()))
+            elif 'goal' in col_lower and 'xg' not in col_lower:
+                s['goals'] = max(s['goals'], int(team_data[col].sum()))
+    
+    return pd.DataFrame(), stats
+
+
+def generate_fifa_single_insights(stats, file_type):
+    """根据FIFA单文件数据生成战术洞察
+    
+    返回与generate_insights兼容的insights列表（含training_key）
+    """
+    teams = list(stats.keys())
+    if len(teams) < 2:
+        return [{"category": "数据概览", "text": "数据不足，无法生成对比洞察", "priority": 3}]
+    
+    insights = []
+    t1, t2 = teams[0], teams[1]
+    s1, s2 = stats[t1], stats[t2]
+    
+    # 射门对比
+    if s1['shots_total'] > 0 or s2['shots_total'] > 0:
+        diff = s1['shots_total'] - s2['shots_total']
+        if abs(diff) >= 3:
+            more = t1 if diff > 0 else t2
+            insights.append({
+                "category": "进攻", "priority": 2,
+                "text": f"{more}射门次数明显更多（{max(s1['shots_total'],s2['shots_total'])} vs {min(s1['shots_total'],s2['shots_total'])}）",
+                "suggestion": "射门少的一方需提升进攻组织效率"
+            })
+        
+        # 射正率
+        for team in teams:
+            s = stats[team]
+            if s['shots_total'] > 3:
+                sot_pct = s['shots_on_target'] / s['shots_total'] * 100
+                if sot_pct < 30:
+                    insights.append({
+                        "category": "射门选择", "priority": 2,
+                        "text": f"{team}射正率仅{sot_pct:.0f}%，射门质量待提升",
+                        "suggestion": "分析射门位置分布，减少低质量射门",
+                        "training_key": "射门选择差",
+                    })
+                elif sot_pct > 55:
+                    insights.append({
+                        "category": "射门选择", "priority": 2,
+                        "text": f"{team}射正率{sot_pct:.0f}%，射门选择质量高",
+                        "suggestion": "把握机会能力强"
+                    })
+        
+        # 进球效率
+        for team in teams:
+            s = stats[team]
+            if s['xg'] > 0 and abs(s['goals'] - s['xg']) >= 0.8:
+                diff = s['goals'] - s['xg']
+                if diff > 0:
+                    insights.append({
+                        "category": "进攻效率", "priority": 1,
+                        "text": f"{team}进攻效率极高：估算xG {s['xg']:.1f} 却打进 {s['goals']} 球，把握机会能力突出",
+                        "suggestion": "对手需限制该队射门机会"
+                    })
+                else:
+                    insights.append({
+                        "category": "进攻效率", "priority": 1,
+                        "text": f"{team}浪费机会：估算xG {s['xg']:.1f} 但只进 {s['goals']} 球",
+                        "suggestion": "临门一脚需专项训练",
+                        "training_key": "终结效率低",
+                    })
+    
+    # 传中质量
+    for team in teams:
+        s = stats[team]
+        if s.get('crosses_total', 0) >= 3:
+            ca = s.get('cross_accuracy', 0)
+            if ca < 25 and ca > 0:
+                insights.append({
+                    "category": "传中质量", "priority": 2,
+                    "text": f"{team}传中{s['crosses_total']}次，成功率仅{ca:.0f}%",
+                    "suggestion": "训练传中精度和落点控制",
+                    "training_key": "传中质量低",
+                })
+    
+    # 对抗能力
+    for team in teams:
+        s = stats[team]
+        if s.get('duels_total', 0) > 10:
+            dsr = s.get('duel_success_rate', 50)
+            if dsr < 40:
+                insights.append({
+                    "category": "对抗能力", "priority": 2,
+                    "text": f"{team}对抗成功率{dsr:.0f}%，处于劣势",
+                    "suggestion": "加强身体对抗和1v1防守能力",
+                    "training_key": "1v1防守差",
+                })
+    
+    # 控球率
+    p1 = s1.get('possession_pct', 50)
+    p2 = s2.get('possession_pct', 50)
+    if abs(p1 - p2) > 15:
+        dominant = t1 if p1 > p2 else t2
+        less = t2 if p1 > p2 else t1
+        insights.append({
+            "category": "比赛节奏", "priority": 2,
+            "text": f"{dominant}控球占优（{max(p1,p2):.0f}% vs {min(p1,p2):.0f}%）",
+            "suggestion": f"{less}应关注反击效率而非追求控球"
+        })
+    
+    # 传球成功率
+    if abs(s1['pass_accuracy'] - s2['pass_accuracy']) > 8:
+        better = t1 if s1['pass_accuracy'] > s2['pass_accuracy'] else t2
+        worse = t2 if s1['pass_accuracy'] > s2['pass_accuracy'] else t1
+        insights.append({
+            "category": "传球质量", "priority": 2,
+            "text": f"{better}传球成功率({max(s1['pass_accuracy'],s2['pass_accuracy']):.0f}%)明显高于{worse}({min(s1['pass_accuracy'],s2['pass_accuracy']):.0f}%)",
+            "suggestion": f"{worse}可能受对手压迫影响"
+        })
+    
+    # 为每条insight附加训练映射
+    try:
+        from stats_engine import TRAINING_MAPPING
+        for ins in insights:
+            tk = ins.get('training_key', '')
+            if tk and tk in TRAINING_MAPPING:
+                mapping = TRAINING_MAPPING[tk]
+                ins['training_recommendations'] = mapping.get('overall', {}).get('trainings', [])
+                ins['training_description'] = mapping.get('overall', {}).get('description', '')
+    except ImportError:
+        pass
+    
+    insights.sort(key=lambda x: x['priority'])
+    
+    if not insights:
+        insights.append({
+            "category": "通用", "text": "双方数据较为均衡", "priority": 3,
+            "suggestion": "可结合更多数据维度进行深入分析"
+        })
+    
+    return insights
